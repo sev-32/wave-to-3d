@@ -57,6 +57,14 @@ export default {
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
         },
+        water: {
+          surface: "hsl(var(--water-surface))",
+          deep: "hsl(var(--water-deep))",
+          caustic: "hsl(var(--water-caustic))",
+        },
+        pool: {
+          tile: "hsl(var(--pool-tile))",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",
