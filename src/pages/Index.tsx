@@ -25,8 +25,9 @@ function InfoPanel() {
         <h3 className="font-semibold text-foreground">Lovable Waves</h3>
       </div>
       <p className="text-sm text-muted-foreground leading-relaxed">
-        React Three Fiber water simulation with real-time caustics. 
-        Drag on the water surface to create ripples. Orbit with mouse to change view.
+        Interactive 3D water with real-time caustics. 
+        <strong> Click water</strong> to add ripples. <strong>Drag sphere</strong> to move it. 
+        <strong>Orbit camera</strong> to view from any angle including underwater.
       </p>
     </div>
   );
@@ -83,11 +84,13 @@ const Index = () => {
         
         <OrbitControls
           enablePan={false}
-          minDistance={2}
-          maxDistance={10}
-          minPolarAngle={0.1}
-          maxPolarAngle={Math.PI / 2 - 0.1}
-          target={[0, 0, 0]}
+          minDistance={1.5}
+          maxDistance={15}
+          minPolarAngle={0}
+          maxPolarAngle={Math.PI}
+          target={[0, -0.3, 0]}
+          enableDamping
+          dampingFactor={0.05}
         />
         
         <ambientLight intensity={0.4} />
