@@ -1,7 +1,10 @@
 /**
  * Rendering Shaders for Water Surface, Pool, and Sphere
- * Ported from GPTWAVES reference - WORKING IMPLEMENTATION
+ * Fixed coordinate systems and caustics application
+ * Includes volumetric lighting integration
  */
+
+import { helperFunctions } from './causticsShaders';
 
 // Water surface vertex shader
 export const waterSurfaceVertexShader = `

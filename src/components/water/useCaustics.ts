@@ -1,130 +1,103 @@
-/**
- * Caustics Hook for React Three Fiber
- * Ported from GPTWAVES reference - WORKING IMPLEMENTATION
- * 
- * CRITICAL: Uses UnsignedByteType render target for correct caustics
- */
-
-import { useMemo, useCallback, useRef } from 'react';
+import { useMemo, useCallback } from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import {
-  CAUSTICS_VERTEX_SHADER,
-  CAUSTICS_FRAGMENT_SHADER,
-  CAUSTICS_FRAGMENT_SHADER_FALLBACK,
+  causticsVertexShader,
+  causticsFragmentShader,
+  causticsFragmentShaderFallback,
 } from './shaders';
 
-interface UseCausticsOptions {
-  resolution?: number;
-  waterMeshDetail?: number;
-}
+const CAUSTIC_SIZE = 1024;
 
-export function useCaustics({
-  resolution = 1024,
-  waterMeshDetail = 200,
-}: UseCausticsOptions = {}) {
+export function useCaustics() {
   const { gl } = useThree();
 
   // Check for OES_standard_derivatives support
   const hasDerivatives = useMemo(() => {
-    const ctx = gl.getContext();
-    const ext = ctx.getExtension('OES_standard_derivatives');
+    const ext = gl.getContext().getExtension('OES_standard_derivatives');
     return !!ext;
   }, [gl]);
 
-  // CRITICAL: UnsignedByteType render target (not FloatType)
-  const causticsTarget = useMemo(
-    () =>
-      new THREE.WebGLRenderTarget(resolution, resolution, {
-        type: THREE.UnsignedByteType, // CRITICAL for correct caustics
-        format: THREE.RGBAFormat,
-        minFilter: THREE.LinearFilter,
-        magFilter: THREE.LinearFilter,
-        stencilBuffer: false,
-        depthBuffer: false,
-      }),
-    [resolution]
-  );
+  // Caustics render target
+  const causticsTarget = useMemo(() => {
+    return new THREE.WebGLRenderTarget(CAUSTIC_SIZE, CAUSTIC_SIZE, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat,
+      stencilBuffer: false,
+      depthBuffer: false,
+    });
+  }, []);
 
-  // Water mesh geometry for caustics projection
-  const causticsGeometry = useMemo(
-    () => new THREE.PlaneGeometry(2, 2, waterMeshDetail, waterMeshDetail),
-    [waterMeshDetail]
-  );
+  // Water mesh for caustics rendering (200x200 grid)
+  const causticsMesh = useMemo(() => {
+    const geometry = new THREE.PlaneGeometry(2, 2, 200, 200);
+    geometry.rotateX(-Math.PI / 2);
+    return geometry;
+  }, []);
 
   // Caustics material
-  const causticsMaterial = useMemo(
-    () =>
-      new THREE.ShaderMaterial({
-        uniforms: {
-          water: { value: null },
-          light: { value: new THREE.Vector3(2, 2, -1).normalize() },
-          sphereCenter: { value: new THREE.Vector3() },
-          sphereRadius: { value: 0.25 },
-        },
-        vertexShader: CAUSTICS_VERTEX_SHADER,
-        fragmentShader: hasDerivatives
-          ? CAUSTICS_FRAGMENT_SHADER
-          : CAUSTICS_FRAGMENT_SHADER_FALLBACK,
-        depthTest: false,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-      }),
-    [hasDerivatives]
-  );
+  const causticsMaterial = useMemo(() => {
+    return new THREE.ShaderMaterial({
+      uniforms: {
+        tWater: { value: null },
+        light: { value: new THREE.Vector3(2, 2, -1).normalize() },
+        sphereCenter: { value: new THREE.Vector3() },
+        sphereRadius: { value: 0.25 },
+      },
+      vertexShader: causticsVertexShader,
+      fragmentShader: hasDerivatives ? causticsFragmentShader : causticsFragmentShaderFallback,
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+  }, [hasDerivatives]);
 
-  // Caustics mesh
-  const causticsMesh = useMemo(
-    () => new THREE.Mesh(causticsGeometry, causticsMaterial),
-    [causticsGeometry, causticsMaterial]
-  );
+  // Mesh for rendering
+  const mesh = useMemo(() => {
+    return new THREE.Mesh(causticsMesh, causticsMaterial);
+  }, [causticsMesh, causticsMaterial]);
 
-  // Caustics scene
+  // Scene and camera for caustics
   const causticsScene = useMemo(() => {
     const scene = new THREE.Scene();
-    scene.add(causticsMesh);
+    scene.add(mesh);
     return scene;
-  }, [causticsMesh]);
+  }, [mesh]);
 
-  // Orthographic camera for caustics
-  const causticsCamera = useMemo(
-    () => new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1),
-    []
-  );
+  const causticsCamera = useMemo(() => {
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    return camera;
+  }, []);
 
   // Update caustics
-  const updateCaustics = useCallback(
-    (
-      waterTexture: THREE.Texture,
-      lightDir: THREE.Vector3,
-      sphereCenter: THREE.Vector3,
-      sphereRadius: number
-    ) => {
-      causticsMaterial.uniforms.water.value = waterTexture;
-      causticsMaterial.uniforms.light.value.copy(lightDir);
-      causticsMaterial.uniforms.sphereCenter.value.copy(sphereCenter);
-      causticsMaterial.uniforms.sphereRadius.value = sphereRadius;
+  const updateCaustics = useCallback((
+    waterTexture: THREE.Texture,
+    sphereCenter: THREE.Vector3,
+    sphereRadius: number,
+    lightDir: THREE.Vector3
+  ) => {
+    causticsMaterial.uniforms.tWater.value = waterTexture;
+    causticsMaterial.uniforms.sphereCenter.value.copy(sphereCenter);
+    causticsMaterial.uniforms.sphereRadius.value = sphereRadius;
+    causticsMaterial.uniforms.light.value.copy(lightDir);
 
-      // CRITICAL: Save and restore render target state
-      const previousTarget = gl.getRenderTarget();
-      const previousClearColor = gl.getClearColor(new THREE.Color());
-      const previousClearAlpha = gl.getClearAlpha();
+    const renderer = gl;
+    renderer.setRenderTarget(causticsTarget);
+    renderer.clear();
+    renderer.render(causticsScene, causticsCamera);
+    renderer.setRenderTarget(null);
+  }, [gl, causticsMaterial, causticsTarget, causticsScene, causticsCamera]);
 
-      gl.setClearColor(0x000000, 0);
-      gl.setRenderTarget(causticsTarget);
-      gl.clear(true, false, false);
-      gl.render(causticsScene, causticsCamera);
-
-      // Restore state
-      gl.setRenderTarget(previousTarget);
-      gl.setClearColor(previousClearColor, previousClearAlpha);
-    },
-    [gl, causticsMaterial, causticsTarget, causticsScene, causticsCamera]
-  );
+  // Get caustics texture
+  const getCausticsTexture = useCallback(() => {
+    return causticsTarget.texture;
+  }, [causticsTarget]);
 
   return {
-    texture: causticsTarget.texture,
     updateCaustics,
+    getCausticsTexture,
+    causticsTarget,
     hasDerivatives,
   };
 }
