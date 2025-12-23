@@ -1,221 +1,212 @@
-import { useRef, useMemo, useCallback, useEffect, useState } from 'react';
+/**
+ * WaterScene - Main water simulation scene component
+ * Ported from GPTWAVES reference - WORKING IMPLEMENTATION
+ */
+
+import { useRef, useMemo, useCallback, useEffect } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useWaterSimulation } from './useWaterSimulation';
 import { useCaustics } from './useCaustics';
 import { createTileTexture, createSkyboxTexture } from './textures';
 import {
-  waterSurfaceVertexShader,
-  waterSurfaceFragmentShaderAbove,
-  waterSurfaceFragmentShaderBelow,
-  poolFragmentShader,
-  poolVertexShader,
-  sphereVertexShader,
-  sphereFragmentShader,
+  WATER_VERTEX_SHADER,
+  WATER_FRAGMENT_SHADER_ABOVE,
+  WATER_FRAGMENT_SHADER_UNDERWATER,
+  CUBE_VERTEX_SHADER,
+  CUBE_FRAGMENT_SHADER,
+  SPHERE_VERTEX_SHADER,
+  SPHERE_FRAGMENT_SHADER,
 } from './shaders';
 
 interface WaterSceneProps {
   onReady?: () => void;
 }
 
-// Interaction modes
+const MODE_NONE = -1;
 const MODE_ADD_DROPS = 0;
 const MODE_MOVE_SPHERE = 1;
-const MODE_ORBIT_CAMERA = 2;
 
 export function WaterScene({ onReady }: WaterSceneProps) {
   const { camera, gl, raycaster, pointer } = useThree();
-  
-  // Water simulation hooks
-  const waterSim = useWaterSimulation();
-  const caustics = useCaustics();
-  
-  // State refs - sphere starts at visible position
-  const sphereCenterRef = useRef(new THREE.Vector3(0, -0.5, 0));
-  const oldSphereCenter = useRef(new THREE.Vector3(0, -0.5, 0));
+
+  // Hooks
+  const { addDrop, moveSphere, stepSimulation, updateNormals, reset, getTexture } = useWaterSimulation();
+  const { texture: causticsTexture, updateCaustics } = useCaustics();
+
+  // State
+  const sphereCenterRef = useRef(new THREE.Vector3(-0.4, -0.75, 0.2));
+  const oldSphereCenterRef = useRef(sphereCenterRef.current.clone());
   const sphereRadius = 0.25;
   const velocityRef = useRef(new THREE.Vector3());
   const lightDir = useMemo(() => new THREE.Vector3(2, 2, -1).normalize(), []);
   const isInitialized = useRef(false);
-  const useSpherePhysics = useRef(true);
-  
+
   // Interaction state
-  const modeRef = useRef(-1);
+  const modeRef = useRef(MODE_NONE);
   const prevHitRef = useRef<THREE.Vector3 | null>(null);
   const planeNormalRef = useRef<THREE.Vector3 | null>(null);
   const isDraggingRef = useRef(false);
-  
+
   // Textures
   const tileTexture = useMemo(() => createTileTexture(), []);
-  const skyboxTexture = useMemo(() => createSkyboxTexture(), []);
-  
-  // Water surface geometry (200x200 grid)
-  const waterGeometry = useMemo(() => {
-    const geo = new THREE.PlaneGeometry(2, 2, 200, 200);
-    geo.rotateX(-Math.PI / 2);
-    return geo;
-  }, []);
-  
-  // Water material for above-water view
-  const waterMaterialAbove = useMemo(() => {
-    return new THREE.ShaderMaterial({
-      uniforms: {
-        tWater: { value: null },
-        tTiles: { value: tileTexture },
-        tCaustics: { value: null },
-        tSky: { value: skyboxTexture },
-        eye: { value: new THREE.Vector3() },
-        light: { value: lightDir },
-        sphereCenter: { value: new THREE.Vector3() },
-        sphereRadius: { value: sphereRadius },
-      },
-      vertexShader: waterSurfaceVertexShader,
-      fragmentShader: waterSurfaceFragmentShaderAbove,
-      side: THREE.FrontSide,
-    });
-  }, [tileTexture, skyboxTexture, lightDir]);
-  
-  // Water material for below-water view (underwater looking up)
-  const waterMaterialBelow = useMemo(() => {
-    return new THREE.ShaderMaterial({
-      uniforms: {
-        tWater: { value: null },
-        tTiles: { value: tileTexture },
-        tCaustics: { value: null },
-        tSky: { value: skyboxTexture },
-        eye: { value: new THREE.Vector3() },
-        light: { value: lightDir },
-        sphereCenter: { value: new THREE.Vector3() },
-        sphereRadius: { value: sphereRadius },
-      },
-      vertexShader: waterSurfaceVertexShader,
-      fragmentShader: waterSurfaceFragmentShaderBelow,
-      side: THREE.BackSide,
-    });
-  }, [tileTexture, skyboxTexture, lightDir]);
-  
-  // Pool geometry - box below water surface
+  const skyCubemap = useMemo(() => createSkyboxTexture(), []);
+
+  // Geometry
+  const waterGeometry = useMemo(() => new THREE.PlaneGeometry(2, 2, 200, 200), []);
+
+  // Pool geometry - matches original GPTWAVES
   const poolGeometry = useMemo(() => {
-    // Create a box that goes from water surface (y=0) down to floor (y=-1)
-    // and extends 1 unit in x and z directions
-    const geo = new THREE.BoxGeometry(2, 1, 2);
-    // Move the box so its top is at y=0
-    geo.translate(0, -0.5, 0);
-    return geo;
+    const geometry = new THREE.BufferGeometry();
+    const pickOctant = (i: number) =>
+      new THREE.Vector3((i & 1) * 2 - 1, (i & 2) - 1, (i & 4) / 2 - 1);
+
+    const faces: [number, number, number, number][] = [
+      [0, 4, 2, 6], // -x
+      [1, 3, 5, 7], // +x
+      [2, 6, 3, 7], // +y (becomes pool bottom)
+      [0, 2, 1, 3], // -z
+      [4, 5, 6, 7], // +z
+    ];
+
+    const positions: number[] = [];
+    const indices: number[] = [];
+
+    for (let faceIndex = 0; faceIndex < faces.length; faceIndex++) {
+      const base = faceIndex * 4;
+      const [a, b, c, d] = faces[faceIndex];
+      for (const corner of [a, b, c, d]) {
+        const p = pickOctant(corner);
+        positions.push(p.x, p.y, p.z);
+      }
+      indices.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
+    }
+
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    return geometry;
   }, []);
-  
-  // Pool material with caustics shader
-  const poolMaterial = useMemo(() => {
-    return new THREE.ShaderMaterial({
-      uniforms: {
-        tWater: { value: null },
-        tTiles: { value: tileTexture },
-        tCaustics: { value: null },
-        light: { value: lightDir },
-        sphereCenter: { value: new THREE.Vector3() },
-        sphereRadius: { value: sphereRadius },
-      },
-      vertexShader: poolVertexShader,
-      fragmentShader: poolFragmentShader,
-      side: THREE.BackSide,
-    });
-  }, [tileTexture, lightDir]);
-  
-  // Sphere geometry and material
-  const sphereGeometry = useMemo(() => {
-    return new THREE.IcosahedronGeometry(1, 3);
-  }, []);
-  
-  const sphereMaterial = useMemo(() => {
-    return new THREE.ShaderMaterial({
-      uniforms: {
-        tWater: { value: null },
-        tCaustics: { value: null },
-        light: { value: lightDir },
-        sphereCenter: { value: new THREE.Vector3() },
-        sphereRadius: { value: sphereRadius },
-      },
-      vertexShader: sphereVertexShader,
-      fragmentShader: sphereFragmentShader,
-    });
-  }, [lightDir]);
-  
-  // Sphere mesh ref for raycasting
-  const sphereMeshRef = useRef<THREE.Mesh>(null);
-  const waterMeshRef = useRef<THREE.Mesh>(null);
-  
-  // Initialize with some drops
+
+  const sphereGeometry = useMemo(() => new THREE.SphereGeometry(1, 32, 32), []);
+
+  // Materials
+  const waterMaterialAbove = useMemo(() => new THREE.ShaderMaterial({
+    uniforms: {
+      water: { value: null },
+      tiles: { value: tileTexture },
+      causticTex: { value: causticsTexture },
+      sky: { value: skyCubemap },
+      eye: { value: new THREE.Vector3() },
+      light: { value: lightDir.clone() },
+      sphereCenter: { value: new THREE.Vector3() },
+      sphereRadius: { value: sphereRadius },
+    },
+    vertexShader: WATER_VERTEX_SHADER,
+    fragmentShader: WATER_FRAGMENT_SHADER_ABOVE,
+    side: THREE.BackSide,
+  }), [tileTexture, causticsTexture, skyCubemap, lightDir]);
+
+  const waterMaterialUnderwater = useMemo(() => new THREE.ShaderMaterial({
+    uniforms: {
+      water: { value: null },
+      tiles: { value: tileTexture },
+      causticTex: { value: causticsTexture },
+      sky: { value: skyCubemap },
+      eye: { value: new THREE.Vector3() },
+      light: { value: lightDir.clone() },
+      sphereCenter: { value: new THREE.Vector3() },
+      sphereRadius: { value: sphereRadius },
+    },
+    vertexShader: WATER_VERTEX_SHADER,
+    fragmentShader: WATER_FRAGMENT_SHADER_UNDERWATER,
+    side: THREE.FrontSide,
+  }), [tileTexture, causticsTexture, skyCubemap, lightDir]);
+
+  const poolMaterial = useMemo(() => new THREE.ShaderMaterial({
+    uniforms: {
+      water: { value: null },
+      tiles: { value: tileTexture },
+      causticTex: { value: causticsTexture },
+      light: { value: lightDir.clone() },
+      sphereCenter: { value: new THREE.Vector3() },
+      sphereRadius: { value: sphereRadius },
+    },
+    vertexShader: CUBE_VERTEX_SHADER,
+    fragmentShader: CUBE_FRAGMENT_SHADER,
+    side: THREE.FrontSide,
+  }), [tileTexture, causticsTexture, lightDir]);
+
+  const sphereMaterial = useMemo(() => new THREE.ShaderMaterial({
+    uniforms: {
+      water: { value: null },
+      causticTex: { value: causticsTexture },
+      light: { value: lightDir.clone() },
+      sphereCenter: { value: new THREE.Vector3() },
+      sphereRadius: { value: sphereRadius },
+    },
+    vertexShader: SPHERE_VERTEX_SHADER,
+    fragmentShader: SPHERE_FRAGMENT_SHADER,
+  }), [causticsTexture, lightDir]);
+
+  // Initialize
   useEffect(() => {
     if (!isInitialized.current) {
+      reset();
       for (let i = 0; i < 20; i++) {
-        const x = Math.random() * 2 - 1;
-        const z = Math.random() * 2 - 1;
-        const strength = (i % 2 === 0) ? 0.01 : -0.01;
-        waterSim.addDrop(x, z, 0.03, strength);
+        addDrop(Math.random() * 2 - 1, Math.random() * 2 - 1, 0.03, i % 2 === 0 ? 0.01 : -0.01);
       }
-      waterSim.updateNormals();
       isInitialized.current = true;
       onReady?.();
     }
-  }, [waterSim, onReady]);
-  
+  }, [addDrop, reset, onReady]);
+
   // Animation loop
-  useFrame((state, delta) => {
+  useFrame((_, delta) => {
     if (delta > 1) return;
-    
+
     // Step simulation
-    waterSim.stepSimulation();
-    waterSim.updateNormals();
-    
+    stepSimulation();
+    stepSimulation();
+    updateNormals();
+
     // Update caustics
-    const waterTexture = waterSim.getWaterTexture();
-    caustics.updateCaustics(waterTexture, sphereCenterRef.current, sphereRadius, lightDir);
-    const causticsTexture = caustics.getCausticsTexture();
-    
-    // Get camera position
-    const cameraPos = camera.position.clone();
-    
-    // Update water materials (above and below)
-    [waterMaterialAbove, waterMaterialBelow].forEach(mat => {
-      mat.uniforms.tWater.value = waterTexture;
-      mat.uniforms.tCaustics.value = causticsTexture;
-      mat.uniforms.eye.value.copy(cameraPos);
+    const waterTexture = getTexture();
+    updateCaustics(waterTexture, lightDir, sphereCenterRef.current, sphereRadius);
+
+    // Get eye position
+    const eye = camera.position.clone();
+
+    // Update all materials
+    [waterMaterialAbove, waterMaterialUnderwater].forEach(mat => {
+      mat.uniforms.water.value = waterTexture;
+      mat.uniforms.causticTex.value = causticsTexture;
+      mat.uniforms.eye.value.copy(eye);
       mat.uniforms.sphereCenter.value.copy(sphereCenterRef.current);
     });
-    
-    // Update pool material
-    poolMaterial.uniforms.tWater.value = waterTexture;
-    poolMaterial.uniforms.tCaustics.value = causticsTexture;
+
+    poolMaterial.uniforms.water.value = waterTexture;
+    poolMaterial.uniforms.causticTex.value = causticsTexture;
     poolMaterial.uniforms.sphereCenter.value.copy(sphereCenterRef.current);
-    
-    // Update sphere material
-    sphereMaterial.uniforms.tWater.value = waterTexture;
-    sphereMaterial.uniforms.tCaustics.value = causticsTexture;
+
+    sphereMaterial.uniforms.water.value = waterTexture;
+    sphereMaterial.uniforms.causticTex.value = causticsTexture;
     sphereMaterial.uniforms.sphereCenter.value.copy(sphereCenterRef.current);
-    
-    // Sphere physics (only when not being dragged)
-    if (useSpherePhysics.current && modeRef.current !== MODE_MOVE_SPHERE) {
+
+    // Sphere physics
+    if (modeRef.current !== MODE_MOVE_SPHERE) {
       const gravity = new THREE.Vector3(0, -4, 0);
       velocityRef.current.add(gravity.clone().multiplyScalar(delta));
-      
       const newCenter = sphereCenterRef.current.clone().add(velocityRef.current.clone().multiplyScalar(delta));
-      
-      // Collision with water surface
-      if (newCenter.y > 0 - sphereRadius && velocityRef.current.y > 0) {
-        velocityRef.current.y *= 0.5; // Slow down when breaking surface
-      }
-      
-      // Collision with pool bottom
+
       const minY = -1 + sphereRadius;
       if (newCenter.y < minY) {
         newCenter.y = minY;
         velocityRef.current.y = -velocityRef.current.y * 0.3;
-        // Apply friction
         velocityRef.current.x *= 0.9;
         velocityRef.current.z *= 0.9;
       }
-      
-      // Collision with pool walls
+
       const wallBound = 1 - sphereRadius;
       if (Math.abs(newCenter.x) > wallBound) {
         newCenter.x = Math.sign(newCenter.x) * wallBound;
@@ -225,202 +216,78 @@ export function WaterScene({ onReady }: WaterSceneProps) {
         newCenter.z = Math.sign(newCenter.z) * wallBound;
         velocityRef.current.z = -velocityRef.current.z * 0.3;
       }
-      
-      // Clamp Y to max height
+
       newCenter.y = Math.min(10, newCenter.y);
-      
-      // Move sphere in water
-      if (!newCenter.equals(oldSphereCenter.current)) {
-        waterSim.moveSphere(oldSphereCenter.current, newCenter, sphereRadius);
+
+      if (!newCenter.equals(oldSphereCenterRef.current)) {
+        moveSphere(oldSphereCenterRef.current, newCenter, sphereRadius);
       }
-      
-      oldSphereCenter.current.copy(sphereCenterRef.current);
+
+      oldSphereCenterRef.current.copy(sphereCenterRef.current);
       sphereCenterRef.current.copy(newCenter);
     }
-  });
-  
-  // Handle pointer down - determine interaction mode
+  }, -1);
+
+  // Pointer handlers
   const handlePointerDown = useCallback((event: any) => {
     event.stopPropagation();
     isDraggingRef.current = true;
-    
-    // Check if clicking on sphere
-    if (sphereMeshRef.current) {
-      raycaster.setFromCamera(pointer, camera);
-      
-      // Create a bounding sphere at the sphere's position
-      const spherePos = sphereCenterRef.current.clone();
-      const boundingSphere = new THREE.Sphere(spherePos, sphereRadius);
-      const ray = raycaster.ray;
-      const intersectPoint = new THREE.Vector3();
-      
-      if (ray.intersectSphere(boundingSphere, intersectPoint)) {
-        // Clicked on sphere - enter sphere move mode
-        modeRef.current = MODE_MOVE_SPHERE;
-        prevHitRef.current = intersectPoint.clone();
-        planeNormalRef.current = camera.position.clone().sub(spherePos).normalize();
-        velocityRef.current.set(0, 0, 0);
-        return;
-      }
+
+    raycaster.setFromCamera(pointer, camera);
+    const ray = raycaster.ray;
+    const spherePos = sphereCenterRef.current.clone();
+    const boundingSphere = new THREE.Sphere(spherePos, sphereRadius);
+    const intersectPoint = new THREE.Vector3();
+
+    if (ray.intersectSphere(boundingSphere, intersectPoint)) {
+      modeRef.current = MODE_MOVE_SPHERE;
+      prevHitRef.current = intersectPoint.clone();
+      planeNormalRef.current = camera.position.clone().sub(spherePos).normalize();
+      velocityRef.current.set(0, 0, 0);
+      return;
     }
-    
-    // Otherwise, add a drop at the water surface
+
     modeRef.current = MODE_ADD_DROPS;
     if (event.uv) {
-      const x = event.uv.x * 2 - 1;
-      const z = event.uv.y * 2 - 1;
-      waterSim.addDrop(x, z, 0.03, 0.02);
+      addDrop(event.uv.x * 2 - 1, event.uv.y * 2 - 1, 0.03, 0.02);
     }
-  }, [camera, pointer, raycaster, waterSim]);
-  
-  // Handle pointer move
+  }, [camera, pointer, raycaster, addDrop]);
+
   const handlePointerMove = useCallback((event: any) => {
     if (!isDraggingRef.current) return;
-    
-    switch (modeRef.current) {
-      case MODE_ADD_DROPS: {
-        if (event.uv) {
-          const x = event.uv.x * 2 - 1;
-          const z = event.uv.y * 2 - 1;
-          waterSim.addDrop(x, z, 0.03, 0.01);
-        }
-        break;
-      }
-      case MODE_MOVE_SPHERE: {
-        if (!prevHitRef.current || !planeNormalRef.current) break;
-        
-        raycaster.setFromCamera(pointer, camera);
-        const ray = raycaster.ray;
-        
-        // Intersect with plane at sphere position
-        const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(
-          planeNormalRef.current,
-          prevHitRef.current
-        );
-        const nextHit = new THREE.Vector3();
-        ray.intersectPlane(plane, nextHit);
-        
-        if (nextHit) {
-          const delta = nextHit.clone().sub(prevHitRef.current);
-          sphereCenterRef.current.add(delta);
-          
-          // Clamp to bounds
-          sphereCenterRef.current.x = Math.max(-1 + sphereRadius, Math.min(1 - sphereRadius, sphereCenterRef.current.x));
-          sphereCenterRef.current.y = Math.max(-1 + sphereRadius, Math.min(10, sphereCenterRef.current.y));
-          sphereCenterRef.current.z = Math.max(-1 + sphereRadius, Math.min(1 - sphereRadius, sphereCenterRef.current.z));
-          
-          prevHitRef.current = nextHit;
-          
-          // Update water with sphere movement
-          waterSim.moveSphere(oldSphereCenter.current, sphereCenterRef.current, sphereRadius);
-          oldSphereCenter.current.copy(sphereCenterRef.current);
-        }
-        break;
+
+    if (modeRef.current === MODE_ADD_DROPS && event.uv) {
+      addDrop(event.uv.x * 2 - 1, event.uv.y * 2 - 1, 0.03, 0.01);
+    } else if (modeRef.current === MODE_MOVE_SPHERE && prevHitRef.current && planeNormalRef.current) {
+      raycaster.setFromCamera(pointer, camera);
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(planeNormalRef.current, prevHitRef.current);
+      const nextHit = new THREE.Vector3();
+      raycaster.ray.intersectPlane(plane, nextHit);
+
+      if (nextHit) {
+        const delta = nextHit.clone().sub(prevHitRef.current);
+        sphereCenterRef.current.add(delta);
+        sphereCenterRef.current.x = Math.max(-1 + sphereRadius, Math.min(1 - sphereRadius, sphereCenterRef.current.x));
+        sphereCenterRef.current.y = Math.max(-1 + sphereRadius, Math.min(10, sphereCenterRef.current.y));
+        sphereCenterRef.current.z = Math.max(-1 + sphereRadius, Math.min(1 - sphereRadius, sphereCenterRef.current.z));
+        prevHitRef.current = nextHit;
+        moveSphere(oldSphereCenterRef.current, sphereCenterRef.current, sphereRadius);
+        oldSphereCenterRef.current.copy(sphereCenterRef.current);
       }
     }
-  }, [camera, pointer, raycaster, waterSim]);
-  
-  // Handle pointer up
+  }, [camera, pointer, raycaster, addDrop, moveSphere]);
+
   const handlePointerUp = useCallback(() => {
     isDraggingRef.current = false;
-    modeRef.current = -1;
+    modeRef.current = MODE_NONE;
   }, []);
-  
+
   return (
     <group onPointerUp={handlePointerUp} onPointerLeave={handlePointerUp}>
-      {/* Water Surface - Above view */}
-      <mesh
-        ref={waterMeshRef}
-        geometry={waterGeometry}
-        material={waterMaterialAbove}
-        position={[0, 0, 0]}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-      />
-      
-      {/* Water Surface - Below view (underwater looking up) */}
-      <mesh
-        geometry={waterGeometry}
-        material={waterMaterialBelow}
-        position={[0, 0, 0]}
-      />
-      
-      {/* Pool Walls with caustics */}
-      <mesh
-        geometry={poolGeometry}
-        material={poolMaterial}
-        position={[0, 0, 0]}
-      />
-      
-      {/* Draggable Sphere */}
-      <mesh
-        ref={sphereMeshRef}
-        geometry={sphereGeometry}
-        material={sphereMaterial}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-      />
-      
-      {/* Skybox with sun glow */}
-      <mesh>
-        <sphereGeometry args={[50, 32, 32]} />
-        <meshBasicMaterial side={THREE.BackSide}>
-          <canvasTexture attach="map" image={createSkyboxCanvas()} />
-        </meshBasicMaterial>
-      </mesh>
-      
-      {/* Sun sprite */}
-      <sprite position={lightDir.clone().multiplyScalar(40)}>
-        <spriteMaterial 
-          color="#fff8e0"
-          transparent
-          opacity={0.9}
-          blending={THREE.AdditiveBlending}
-        />
-      </sprite>
+      <mesh geometry={waterGeometry} material={waterMaterialAbove} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} />
+      <mesh geometry={waterGeometry} material={waterMaterialUnderwater} />
+      <mesh geometry={poolGeometry} material={poolMaterial} />
+      <mesh geometry={sphereGeometry} material={sphereMaterial} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} />
     </group>
   );
-}
-
-// Create a procedural skybox canvas with sun
-function createSkyboxCanvas(): HTMLCanvasElement {
-  const canvas = document.createElement('canvas');
-  canvas.width = 1024;
-  canvas.height = 512;
-  const ctx = canvas.getContext('2d')!;
-  
-  // Sky gradient
-  const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  gradient.addColorStop(0, '#0d1f33');
-  gradient.addColorStop(0.3, '#1e3a5f');
-  gradient.addColorStop(0.6, '#3d6b99');
-  gradient.addColorStop(1, '#87CEEB');
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  
-  // Sun glow
-  const sunX = canvas.width * 0.7;
-  const sunY = canvas.height * 0.25;
-  const sunGradient = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, 150);
-  sunGradient.addColorStop(0, 'rgba(255, 250, 220, 1)');
-  sunGradient.addColorStop(0.1, 'rgba(255, 240, 180, 0.9)');
-  sunGradient.addColorStop(0.3, 'rgba(255, 200, 100, 0.4)');
-  sunGradient.addColorStop(0.6, 'rgba(255, 150, 50, 0.1)');
-  sunGradient.addColorStop(1, 'rgba(255, 100, 0, 0)');
-  ctx.fillStyle = sunGradient;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  
-  // Clouds
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-  for (let i = 0; i < 8; i++) {
-    const x = Math.random() * canvas.width;
-    const y = canvas.height * 0.2 + Math.random() * canvas.height * 0.3;
-    const w = 80 + Math.random() * 150;
-    const h = 20 + Math.random() * 40;
-    ctx.beginPath();
-    ctx.ellipse(x, y, w, h, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  
-  return canvas;
 }
