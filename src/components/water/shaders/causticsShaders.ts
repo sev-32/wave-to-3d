@@ -1,47 +1,19 @@
 /**
- * Caustics Shaders for React Three Fiber
- * CRITICAL: Uses OES_standard_derivatives for dFdx/dFdy calculations
- * Fixed coordinate system to match pool geometry
+ * Caustics Shaders - Faithfully ported from original lovable-waves
+ * CRITICAL: Uses OES_standard_derivatives for dFdx/dFdy
+ * The caustics vertex shader projects light through the water surface
+ * and the fragment shader calculates intensity from area change
  */
 
-// Helper functions shared across shaders
-export const helperFunctions = `
-  const float IOR_AIR = 1.0;
-  const float IOR_WATER = 1.333;
-  const vec3 abovewaterColor = vec3(0.25, 1.0, 1.25);
-  const vec3 underwaterColor = vec3(0.4, 0.9, 1.0);
-  const float poolHeight = 1.0;
-  
-  vec2 intersectCube(vec3 origin, vec3 ray, vec3 cubeMin, vec3 cubeMax) {
-    vec3 tMin = (cubeMin - origin) / ray;
-    vec3 tMax = (cubeMax - origin) / ray;
-    vec3 t1 = min(tMin, tMax);
-    vec3 t2 = max(tMin, tMax);
-    float tNear = max(max(t1.x, t1.y), t1.z);
-    float tFar = min(min(t2.x, t2.y), t2.z);
-    return vec2(tNear, tFar);
-  }
-  
-  float intersectSphere(vec3 origin, vec3 ray, vec3 sphereCenter, float sphereRadius) {
-    vec3 toSphere = origin - sphereCenter;
-    float a = dot(ray, ray);
-    float b = 2.0 * dot(toSphere, ray);
-    float c = dot(toSphere, toSphere) - sphereRadius * sphereRadius;
-    float discriminant = b*b - 4.0*a*c;
-    if (discriminant > 0.0) {
-      float t = (-b - sqrt(discriminant)) / (2.0 * a);
-      if (t > 0.0) return t;
-    }
-    return 1.0e6;
-  }
-`;
-
-// Caustics vertex shader - projects light rays through water surface to pool floor
+// Caustics vertex shader - projects light rays through water surface
+// Matches original Renderer.ts causticsShader vertex exactly
 export const causticsVertexShader = `
   precision highp float;
   
   uniform sampler2D tWater;
   uniform vec3 light;
+  uniform vec3 sphereCenter;
+  uniform float sphereRadius;
   
   varying vec3 oldPos;
   varying vec3 newPos;
@@ -62,40 +34,37 @@ export const causticsVertexShader = `
   }
   
   vec3 project(vec3 origin, vec3 ray, vec3 refractedLight) {
-    // Find where ray exits the pool cube
     vec2 tcube = intersectCube(origin, ray, vec3(-1.0, -poolHeight, -1.0), vec3(1.0, 2.0, 1.0));
     origin += ray * tcube.y;
-    // Project to pool floor (y = -1)
     float tplane = (-origin.y - 1.0) / refractedLight.y;
     return origin + refractedLight * tplane;
   }
   
   void main() {
-    // Get UV from position (plane goes from -1 to 1)
+    // Original uses gl_Vertex.xy * 0.5 + 0.5 for UV
+    // In R3F, the plane geometry position goes from -1 to 1
     vec2 waterUV = position.xy * 0.5 + 0.5;
     
-    // Sample water height and normal
     vec4 info = texture2D(tWater, waterUV);
     info.ba *= 0.5;
     vec3 normal = vec3(info.b, sqrt(1.0 - dot(info.ba, info.ba)), info.a);
     
-    // Calculate refracted light rays
     vec3 refractedLight = refract(-light, vec3(0.0, 1.0, 0.0), IOR_AIR / IOR_WATER);
     vRay = refract(-light, normal, IOR_AIR / IOR_WATER);
     
-    // Vertex position on water surface (XZ plane at Y=0)
+    // Original: gl_Vertex.xzy (swizzle y and z)
+    // position.xy maps to xz plane in world space
     vec3 vertexPos = vec3(position.x, 0.0, position.y);
     
-    // Project positions - oldPos with flat water, newPos with displaced water
     oldPos = project(vertexPos, refractedLight, refractedLight);
     newPos = project(vertexPos + vec3(0.0, info.r, 0.0), vRay, refractedLight);
     
-    // Output position for caustics texture - map to -1..1 range
     gl_Position = vec4(0.75 * (newPos.xz + refractedLight.xz / refractedLight.y), 0.0, 1.0);
   }
 `;
 
-// Caustics fragment shader - CRITICAL: uses dFdx/dFdy for area calculation
+// Caustics fragment shader with OES_standard_derivatives
+// Matches original exactly
 export const causticsFragmentShader = `
   #extension GL_OES_standard_derivatives : enable
   
@@ -124,21 +93,13 @@ export const causticsFragmentShader = `
   }
   
   void main() {
-    // Calculate caustic intensity from area change
-    // Light focuses where newArea < oldArea (bright spots)
-    // Light spreads where newArea > oldArea (dark spots)
     float oldArea = length(dFdx(oldPos)) * length(dFdy(oldPos));
     float newArea = length(dFdx(newPos)) * length(dFdy(newPos));
+    gl_FragColor = vec4(oldArea / newArea * 0.2, 1.0, 0.0, 0.0);
     
-    // Caustic intensity - ratio of areas with brightness factor
-    float causticIntensity = oldArea / newArea * 0.2;
-    
-    // R channel: caustic brightness, G channel: shadow
-    gl_FragColor = vec4(causticIntensity, 1.0, 0.0, 0.0);
-    
-    // Calculate sphere shadow on caustics
     vec3 refractedLight = refract(-light, vec3(0.0, 1.0, 0.0), IOR_AIR / IOR_WATER);
     
+    // Sphere shadow on caustics
     vec3 dir = (sphereCenter - newPos) / sphereRadius;
     vec3 area = cross(dir, refractedLight);
     float shadow = dot(area, area);
@@ -148,7 +109,7 @@ export const causticsFragmentShader = `
     shadow = mix(1.0, shadow, clamp(dist * 2.0, 0.0, 1.0));
     gl_FragColor.g = shadow;
     
-    // Edge fade - prevent caustics from appearing outside pool
+    // Edge fade
     vec2 t = intersectCube(newPos, -refractedLight, vec3(-1.0, -poolHeight, -1.0), vec3(1.0, 2.0, 1.0));
     gl_FragColor.r *= 1.0 / (1.0 + exp(-200.0 / (1.0 + 10.0 * (t.y - t.x)) * (newPos.y - refractedLight.y * t.y - 2.0 / 12.0)));
   }
@@ -181,7 +142,6 @@ export const causticsFragmentShaderFallback = `
   }
   
   void main() {
-    // Fallback: constant caustic intensity (no derivatives)
     gl_FragColor = vec4(0.2, 0.2, 0.0, 0.0);
     
     vec3 refractedLight = refract(-light, vec3(0.0, 1.0, 0.0), IOR_AIR / IOR_WATER);
