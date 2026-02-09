@@ -29,10 +29,11 @@ export function useCaustics() {
     });
   }, []);
 
-  // Water mesh for caustics rendering (200x200 grid)
+  // Water mesh for caustics rendering (200x200 grid matching original)
   const causticsMesh = useMemo(() => {
     const geometry = new THREE.PlaneGeometry(2, 2, 200, 200);
-    geometry.rotateX(-Math.PI / 2);
+    // Don't rotate - the vertex shader handles the coordinate transform
+    // position.xy maps to xz in world space via gl_Vertex.xzy
     return geometry;
   }, []);
 
@@ -66,8 +67,7 @@ export function useCaustics() {
   }, [mesh]);
 
   const causticsCamera = useMemo(() => {
-    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-    return camera;
+    return new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   }, []);
 
   // Update caustics
