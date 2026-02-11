@@ -62,7 +62,7 @@ export function useSDFWaterSimulation() {
     });
   }, []);
 
-  // SDF-based water update material (replaces simple wave equation)
+  // SDF-based water update material with surface tension + capillary waves
   const updateMaterial = useMemo(() => {
     return new THREE.ShaderMaterial({
       uniforms: {
@@ -73,6 +73,8 @@ export function useSDFWaterSimulation() {
         sphereVelocity: { value: new THREE.Vector3() },
         sphereRadius: { value: 0.25 },
         time: { value: 0 },
+        surfaceTension: { value: 0.001 },    // σ/ρ scaled for sim grid
+        capillaryDamping: { value: 0.15 },    // extra damping for high-k modes
       },
       vertexShader: sdfSimulationVertexShader,
       fragmentShader: sdfWaterUpdateShader,
