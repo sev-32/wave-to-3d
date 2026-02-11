@@ -2,6 +2,7 @@
  * Rendering Shaders for Water Surface, Pool, and Sphere
  * Faithfully ported from the original lovable-waves implementation
  * Uses samplerCube for sky reflections, proper caustic sampling
+ * Now includes foam rendering on water surface
  */
 
 // Water surface vertex shader - displaces vertices by water height
@@ -16,10 +17,8 @@ export const waterSurfaceVertexShader = `
   void main() {
     vUv = uv;
     
-    // Sample water height
     vec4 info = texture2D(tWater, uv);
     
-    // Displace vertex by water height
     vec3 pos = position;
     pos.y += info.r;
     
@@ -29,8 +28,7 @@ export const waterSurfaceVertexShader = `
   }
 `;
 
-// Common helper functions shared across all render shaders
-// Matches the original helperFunctions from Renderer.ts exactly
+// Common helper functions
 const shaderCommon = `
   const float IOR_AIR = 1.0;
   const float IOR_WATER = 1.333;
@@ -64,7 +62,6 @@ const shaderCommon = `
   vec3 getSphereColor(vec3 point, vec3 sphereCenter, float sphereRadius, vec3 light, sampler2D water, sampler2D causticTex) {
     vec3 color = vec3(0.5);
     
-    // Edge darkening based on distance to walls
     color *= 1.0 - 0.9 / pow((1.0 + sphereRadius - abs(point.x)) / sphereRadius, 3.0);
     color *= 1.0 - 0.9 / pow((1.0 + sphereRadius - abs(point.z)) / sphereRadius, 3.0);
     color *= 1.0 - 0.9 / pow((point.y + 1.0 + sphereRadius) / sphereRadius, 3.0);
@@ -117,16 +114,35 @@ const shaderCommon = `
     
     return wallColor * scale;
   }
+  
+  // Foam color blending
+  vec3 applyFoam(vec3 baseColor, float foamDensity, float foamAge, float fresnel) {
+    if (foamDensity < 0.01) return baseColor;
+    
+    // High-albedo foam with subtle color variation
+    vec3 foamAlbedo = vec3(0.85, 0.9, 0.95);
+    float ageFactor = exp(-foamAge * 0.5);
+    foamAlbedo *= 0.7 + 0.3 * ageFactor;
+    
+    // Density-driven opacity with soft threshold
+    float foamOpacity = smoothstep(0.02, 0.4, foamDensity);
+    foamOpacity *= 0.7 + 0.3 * ageFactor;
+    
+    // Foam reduces Fresnel effect (more diffuse)
+    float foamFresnel = mix(0.2, fresnel, 0.3);
+    
+    return mix(baseColor, foamAlbedo * (0.5 + 0.5 * foamFresnel), foamOpacity);
+  }
 `;
 
-// Water surface fragment shader - ABOVE water view
-// Matches original: waterShaders[0] (FRONT face culled = looking from above)
+// Water surface fragment shader - ABOVE water view with foam
 export const waterSurfaceFragmentShaderAbove = `
   precision highp float;
   
   uniform sampler2D tWater;
   uniform sampler2D tTiles;
   uniform sampler2D tCaustics;
+  uniform sampler2D tFoam;
   uniform samplerCube tSky;
   uniform vec3 eye;
   uniform vec3 light;
@@ -181,18 +197,25 @@ export const waterSurfaceFragmentShaderAbove = `
     vec3 reflectedColor = getSurfaceRayColor(vPosition, reflectedRay, abovewaterColor);
     vec3 refractedColor = getSurfaceRayColor(vPosition, refractedRay, abovewaterColor);
     
-    gl_FragColor = vec4(mix(refractedColor, reflectedColor, fresnel), 1.0);
+    vec3 waterColor = mix(refractedColor, reflectedColor, fresnel);
+    
+    // Apply foam
+    vec2 foamCoord = vPosition.xz * 0.5 + 0.5;
+    vec4 foamData = texture2D(tFoam, foamCoord);
+    waterColor = applyFoam(waterColor, foamData.r, foamData.g, fresnel);
+    
+    gl_FragColor = vec4(waterColor, 1.0);
   }
 `;
 
-// Water surface fragment shader - BELOW water view (underwater looking up)
-// Matches original: waterShaders[1] (BACK face culled = looking from below)
+// Water surface fragment shader - BELOW water view with foam
 export const waterSurfaceFragmentShaderBelow = `
   precision highp float;
   
   uniform sampler2D tWater;
   uniform sampler2D tTiles;
   uniform sampler2D tCaustics;
+  uniform sampler2D tFoam;
   uniform samplerCube tSky;
   uniform vec3 eye;
   uniform vec3 light;
@@ -247,26 +270,34 @@ export const waterSurfaceFragmentShaderBelow = `
     vec3 reflectedColor = getSurfaceRayColor(vPosition, reflectedRay, underwaterColor);
     vec3 refractedColor = getSurfaceRayColor(vPosition, refractedRay, vec3(1.0)) * vec3(0.8, 1.0, 1.1);
     
-    gl_FragColor = vec4(mix(reflectedColor, refractedColor, (1.0 - fresnel) * length(refractedRay)), 1.0);
+    vec3 waterColor = mix(reflectedColor, refractedColor, (1.0 - fresnel) * length(refractedRay));
+    
+    // Foam visible from below (darker, diffuse shadow)
+    vec2 foamCoord = vPosition.xz * 0.5 + 0.5;
+    vec4 foamData = texture2D(tFoam, foamCoord);
+    if (foamData.r > 0.01) {
+      // Foam from below appears as dark patches (blocks light)
+      float foamShadow = 1.0 - smoothstep(0.02, 0.5, foamData.r) * 0.4;
+      waterColor *= foamShadow;
+    }
+    
+    gl_FragColor = vec4(waterColor, 1.0);
   }
 `;
 
 // Pool walls vertex shader
-// Matches original cube shader: position.y = ((1.0 - gl_Vertex.y) * (7.0 / 12.0) - 1.0) * poolHeight
 export const poolVertexShader = `
   precision highp float;
   
   varying vec3 vPosition;
   
   void main() {
-    // Position is the pool geometry vertex
     vPosition = position;
-    
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
 
-// Pool walls fragment shader - matches original cubeShader exactly
+// Pool walls fragment shader
 export const poolFragmentShader = `
   precision highp float;
   
@@ -284,7 +315,6 @@ export const poolFragmentShader = `
   void main() {
     vec3 color = getWallColor(vPosition, sphereCenter, sphereRadius, light, tTiles, tWater, tCaustics);
     
-    // Underwater tinting (matches original)
     vec4 info = texture2D(tWater, vPosition.xz * 0.5 + 0.5);
     if (vPosition.y < info.r) {
       color *= underwaterColor * 1.2;
@@ -294,7 +324,7 @@ export const poolFragmentShader = `
   }
 `;
 
-// Sphere vertex shader - transforms unit sphere to world position
+// Sphere vertex shader
 export const sphereVertexShader = `
   precision highp float;
   
@@ -309,7 +339,7 @@ export const sphereVertexShader = `
   }
 `;
 
-// Sphere fragment shader - matches original getSphereColor exactly
+// Sphere fragment shader
 export const sphereFragmentShader = `
   precision highp float;
   

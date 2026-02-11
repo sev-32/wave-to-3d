@@ -3,6 +3,8 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useSDFWaterSimulation } from './useSDFWaterSimulation';
 import { useCaustics } from './useCaustics';
+import { useFoamSimulation } from './useFoamSimulation';
+import { SprayParticles } from './SprayParticles';
 import { createTileTexture, createSkyboxTexture } from './textures';
 import {
   waterSurfaceVertexShader,
@@ -18,16 +20,15 @@ interface WaterSceneProps {
   onReady?: () => void;
 }
 
-// Interaction modes
 const MODE_ADD_DROPS = 0;
 const MODE_MOVE_SPHERE = 1;
 
 export function WaterScene({ onReady }: WaterSceneProps) {
   const { camera, gl, raycaster, pointer } = useThree();
 
-  // SDF water simulation + caustics hooks
   const waterSim = useSDFWaterSimulation();
   const caustics = useCaustics();
+  const foamSim = useFoamSimulation();
 
   // State refs
   const sphereCenterRef = useRef(new THREE.Vector3(-0.4, -0.75, 0.2));
@@ -49,14 +50,14 @@ export function WaterScene({ onReady }: WaterSceneProps) {
   const tileTexture = useMemo(() => createTileTexture(), []);
   const skyboxTexture = useMemo(() => createSkyboxTexture(), []);
 
-  // Water surface geometry (200x200 grid matching original)
+  // Water surface geometry
   const waterGeometry = useMemo(() => {
     const geo = new THREE.PlaneGeometry(2, 2, 200, 200);
     geo.rotateX(-Math.PI / 2);
     return geo;
   }, []);
 
-  // Water material for above-water view (FRONT side = looking down from above)
+  // Water material for above-water view
   const waterMaterialAbove = useMemo(() => {
     return new THREE.ShaderMaterial({
       uniforms: {
@@ -64,6 +65,7 @@ export function WaterScene({ onReady }: WaterSceneProps) {
         tTiles: { value: tileTexture },
         tCaustics: { value: null },
         tSky: { value: skyboxTexture },
+        tFoam: { value: null },
         eye: { value: new THREE.Vector3() },
         light: { value: lightDir },
         sphereCenter: { value: new THREE.Vector3() },
@@ -75,7 +77,7 @@ export function WaterScene({ onReady }: WaterSceneProps) {
     });
   }, [tileTexture, skyboxTexture, lightDir]);
 
-  // Water material for below-water view (BACK side = looking up from underwater)
+  // Water material for below-water view
   const waterMaterialBelow = useMemo(() => {
     return new THREE.ShaderMaterial({
       uniforms: {
@@ -83,6 +85,7 @@ export function WaterScene({ onReady }: WaterSceneProps) {
         tTiles: { value: tileTexture },
         tCaustics: { value: null },
         tSky: { value: skyboxTexture },
+        tFoam: { value: null },
         eye: { value: new THREE.Vector3() },
         light: { value: lightDir },
         sphereCenter: { value: new THREE.Vector3() },
@@ -94,18 +97,13 @@ export function WaterScene({ onReady }: WaterSceneProps) {
     });
   }, [tileTexture, skyboxTexture, lightDir]);
 
-  // Pool geometry - box matching original cube shader
-  // Original: position.y = ((1.0 - gl_Vertex.y) * (7.0 / 12.0) - 1.0) * poolHeight
-  // This maps vertex y from [-1,1] to pool coords [-1, 2/12]
-  // We use a BoxGeometry and position it so the pool extends from y=-1 to y=0
+  // Pool geometry
   const poolGeometry = useMemo(() => {
     const geo = new THREE.BoxGeometry(2, 1, 2);
-    // Shift so top is at y=0 and bottom is at y=-1
     geo.translate(0, -0.5, 0);
     return geo;
   }, []);
 
-  // Pool material - rendered with BACK face (looking from inside/through walls)
   const poolMaterial = useMemo(() => {
     return new THREE.ShaderMaterial({
       uniforms: {
@@ -122,11 +120,8 @@ export function WaterScene({ onReady }: WaterSceneProps) {
     });
   }, [tileTexture, lightDir]);
 
-  // Sphere geometry and material
-  const sphereGeometry = useMemo(() => {
-    return new THREE.IcosahedronGeometry(1, 3);
-  }, []);
-
+  // Sphere
+  const sphereGeometry = useMemo(() => new THREE.IcosahedronGeometry(1, 3), []);
   const sphereMaterial = useMemo(() => {
     return new THREE.ShaderMaterial({
       uniforms: {
@@ -141,11 +136,10 @@ export function WaterScene({ onReady }: WaterSceneProps) {
     });
   }, [lightDir]);
 
-  // Sphere mesh ref for raycasting
   const sphereMeshRef = useRef<THREE.Mesh>(null);
   const waterMeshRef = useRef<THREE.Mesh>(null);
 
-  // Initialize with some drops (matching original: 20 drops)
+  // Initialize
   useEffect(() => {
     if (!isInitialized.current) {
       for (let i = 0; i < 20; i++) {
@@ -160,12 +154,12 @@ export function WaterScene({ onReady }: WaterSceneProps) {
     }
   }, [waterSim, onReady]);
 
-  // Animation loop - matches original update() and draw()
+  // Animation loop
   useFrame((state, delta) => {
     if (delta > 1) return;
     timeRef.current += delta;
 
-    // Sphere physics (matching original buoyancy model)
+    // Sphere physics
     if (modeRef.current === MODE_MOVE_SPHERE) {
       velocityRef.current.set(0, 0, 0);
     } else if (useSpherePhysics.current) {
@@ -173,13 +167,11 @@ export function WaterScene({ onReady }: WaterSceneProps) {
         (sphereRadius - sphereCenterRef.current.y) / (2 * sphereRadius)
       ));
 
-      // Gravity with buoyancy
       const gravity = new THREE.Vector3(0, -4, 0);
       velocityRef.current.add(
         gravity.clone().multiplyScalar(delta - 1.1 * delta * percentUnderWater)
       );
 
-      // Water drag
       const speed = velocityRef.current.length();
       if (speed > 0.001) {
         const dragForce = velocityRef.current.clone().normalize().multiplyScalar(
@@ -192,13 +184,11 @@ export function WaterScene({ onReady }: WaterSceneProps) {
         velocityRef.current.clone().multiplyScalar(delta)
       );
 
-      // Collision with pool bottom
       if (newCenter.y < sphereRadius - 1) {
         newCenter.y = sphereRadius - 1;
         velocityRef.current.y = Math.abs(velocityRef.current.y) * 0.7;
       }
 
-      // Collision with pool walls
       const wallBound = 1 - sphereRadius;
       newCenter.x = Math.max(-wallBound, Math.min(wallBound, newCenter.x));
       newCenter.z = Math.max(-wallBound, Math.min(wallBound, newCenter.z));
@@ -207,7 +197,7 @@ export function WaterScene({ onReady }: WaterSceneProps) {
       sphereCenterRef.current.copy(newCenter);
     }
 
-    // Move sphere in water (SDF-based)
+    // SDF sphere movement in water
     waterSim.moveSphere(
       oldSphereCenter.current,
       sphereCenterRef.current,
@@ -217,23 +207,34 @@ export function WaterScene({ onReady }: WaterSceneProps) {
     );
     oldSphereCenter.current.copy(sphereCenterRef.current);
 
-    // Step simulation twice (matching original: water.stepSimulation() x2)
+    // Step water simulation (x2 for stability)
     waterSim.stepSimulation(sphereCenterRef.current, velocityRef.current, sphereRadius, timeRef.current);
     waterSim.stepSimulation(sphereCenterRef.current, velocityRef.current, sphereRadius, timeRef.current);
     waterSim.updateNormals(sphereCenterRef.current, sphereRadius);
 
-    // Update caustics
     const waterTexture = waterSim.getWaterTexture();
+
+    // Step foam simulation
+    foamSim.stepFoam(
+      waterTexture,
+      sphereCenterRef.current,
+      velocityRef.current,
+      sphereRadius,
+      delta
+    );
+    const foamTexture = foamSim.getFoamTexture();
+
+    // Update caustics
     caustics.updateCaustics(waterTexture, sphereCenterRef.current, sphereRadius, lightDir);
     const causticsTexture = caustics.getCausticsTexture();
 
-    // Get camera position
     const cameraPos = camera.position.clone();
 
-    // Update water materials
+    // Update water materials (including foam texture)
     [waterMaterialAbove, waterMaterialBelow].forEach(mat => {
       mat.uniforms.tWater.value = waterTexture;
       mat.uniforms.tCaustics.value = causticsTexture;
+      mat.uniforms.tFoam.value = foamTexture;
       mat.uniforms.eye.value.copy(cameraPos);
       mat.uniforms.sphereCenter.value.copy(sphereCenterRef.current);
     });
@@ -249,15 +250,13 @@ export function WaterScene({ onReady }: WaterSceneProps) {
     sphereMaterial.uniforms.sphereCenter.value.copy(sphereCenterRef.current);
   });
 
-  // Handle pointer down - determine interaction mode
+  // Interaction handlers
   const handlePointerDown = useCallback((event: any) => {
     event.stopPropagation();
     isDraggingRef.current = true;
 
-    // Check if clicking on sphere
     if (sphereMeshRef.current) {
       raycaster.setFromCamera(pointer, camera);
-
       const spherePos = sphereCenterRef.current.clone();
       const boundingSphere = new THREE.Sphere(spherePos, sphereRadius);
       const ray = raycaster.ray;
@@ -272,7 +271,6 @@ export function WaterScene({ onReady }: WaterSceneProps) {
       }
     }
 
-    // Otherwise, add a drop at the water surface
     modeRef.current = MODE_ADD_DROPS;
     if (event.uv) {
       const x = event.uv.x * 2 - 1;
@@ -281,7 +279,6 @@ export function WaterScene({ onReady }: WaterSceneProps) {
     }
   }, [camera, pointer, raycaster, waterSim]);
 
-  // Handle pointer move
   const handlePointerMove = useCallback((event: any) => {
     if (!isDraggingRef.current) return;
 
@@ -311,7 +308,6 @@ export function WaterScene({ onReady }: WaterSceneProps) {
           const moveDelta = nextHit.clone().sub(prevHitRef.current);
           sphereCenterRef.current.add(moveDelta);
 
-          // Clamp to bounds
           const wallBound = 1 - sphereRadius;
           sphereCenterRef.current.x = Math.max(-wallBound, Math.min(wallBound, sphereCenterRef.current.x));
           sphereCenterRef.current.y = Math.max(sphereRadius - 1, Math.min(10, sphereCenterRef.current.y));
@@ -324,7 +320,6 @@ export function WaterScene({ onReady }: WaterSceneProps) {
     }
   }, [camera, pointer, raycaster, waterSim]);
 
-  // Handle pointer up
   const handlePointerUp = useCallback(() => {
     isDraggingRef.current = false;
     modeRef.current = -1;
@@ -342,27 +337,36 @@ export function WaterScene({ onReady }: WaterSceneProps) {
         onPointerMove={handlePointerMove}
       />
 
-      {/* Water Surface - Below view (underwater looking up) */}
+      {/* Water Surface - Below view */}
       <mesh
         geometry={waterGeometry}
         material={waterMaterialBelow}
         position={[0, 0, 0]}
       />
 
-      {/* Pool Walls with caustics */}
+      {/* Pool Walls */}
       <mesh
         geometry={poolGeometry}
         material={poolMaterial}
         position={[0, 0, 0]}
       />
 
-      {/* Draggable Sphere */}
+      {/* Sphere */}
       <mesh
         ref={sphereMeshRef}
         geometry={sphereGeometry}
         material={sphereMaterial}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
+      />
+
+      {/* Spray Particles */}
+      <SprayParticles
+        waterTexture={waterSim.getWaterTexture()}
+        sphereCenter={sphereCenterRef.current}
+        sphereVelocity={velocityRef.current}
+        sphereRadius={sphereRadius}
+        lightDir={lightDir}
       />
 
       {/* Skybox */}
@@ -386,14 +390,12 @@ export function WaterScene({ onReady }: WaterSceneProps) {
   );
 }
 
-// Create a procedural skybox canvas with sun
 function createSkyboxCanvas(): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = 1024;
   canvas.height = 512;
   const ctx = canvas.getContext('2d')!;
 
-  // Sky gradient
   const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
   gradient.addColorStop(0, '#0d1f33');
   gradient.addColorStop(0.3, '#1e3a5f');
@@ -402,7 +404,6 @@ function createSkyboxCanvas(): HTMLCanvasElement {
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Sun glow
   const sunX = canvas.width * 0.7;
   const sunY = canvas.height * 0.25;
   const sunGradient = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, 150);
@@ -414,7 +415,6 @@ function createSkyboxCanvas(): HTMLCanvasElement {
   ctx.fillStyle = sunGradient;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Clouds
   ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
   for (let i = 0; i < 8; i++) {
     const x = Math.random() * canvas.width;
