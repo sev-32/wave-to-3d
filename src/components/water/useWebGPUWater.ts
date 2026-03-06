@@ -99,16 +99,16 @@ export function useWebGPUWater(): WebGPUWaterAPI {
       lastVersion.current = gpu.dataVersion;
 
       // Update water texture
-      const waterData = waterTexture.image.data as Float32Array;
+      const waterData = (waterTexture.image as any).data as Float32Array;
       waterData.set(gpu.waterData);
       waterTexture.needsUpdate = true;
 
       // Update field textures
-      const fieldData = fieldTexture.image.data as Float32Array;
+      const fieldData = (fieldTexture.image as any).data as Float32Array;
       fieldData.set(gpu.fieldData);
       fieldTexture.needsUpdate = true;
 
-      const field2Data = field2Texture.image.data as Float32Array;
+      const field2Data = (field2Texture.image as any).data as Float32Array;
       field2Data.set(gpu.field2Data);
       field2Texture.needsUpdate = true;
 
