@@ -23,26 +23,21 @@ interface WaterSceneProps {
   onReady?: () => void;
   showHeatmap?: boolean;
   onWebGPUStatus?: (status: boolean) => void;
+  onSphereDragChange?: (dragging: boolean) => void;
 }
 
 const MODE_ADD_DROPS = 0;
 const MODE_MOVE_SPHERE = 1;
 
-export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus }: WaterSceneProps) {
+export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus, onSphereDragChange }: WaterSceneProps) {
   const { camera, gl, raycaster, pointer } = useThree();
   
-  // WebGPU water system (primary)
   const webgpu = useWebGPUWater();
-  
-  // WebGL fallback
   const webglSim = useWaterSimulation();
-  
-  // Caustics (always WebGL-based)
   const caustics = useCaustics();
   
   const useGPU = webgpu.isWebGPU && webgpu.isReady;
   
-  // State refs
   const sphereCenterRef = useRef(new THREE.Vector3(0, -0.5, 0));
   const oldSphereCenter = useRef(new THREE.Vector3(0, -0.5, 0));
   const sphereRadius = 0.25;
@@ -51,31 +46,26 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus }: Wat
   const isInitialized = useRef(false);
   const timeRef = useRef(0);
   
-  // Interaction state
   const modeRef = useRef(-1);
   const prevHitRef = useRef<THREE.Vector3 | null>(null);
   const planeNormalRef = useRef<THREE.Vector3 | null>(null);
   const isDraggingRef = useRef(false);
   
-  // Textures
   const tileTexture = useMemo(() => createTileTexture(), []);
   const skyboxTexture = useMemo(() => createSkyboxTexture(), []);
   
-  // Report WebGPU status
   useEffect(() => {
     if (webgpu.isReady) {
       onWebGPUStatus?.(webgpu.isWebGPU);
     }
   }, [webgpu.isReady, webgpu.isWebGPU, onWebGPUStatus]);
   
-  // Water surface geometry
   const waterGeometry = useMemo(() => {
     const geo = new THREE.PlaneGeometry(2, 2, 200, 200);
     geo.rotateX(-Math.PI / 2);
     return geo;
   }, []);
   
-  // Water material - above
   const waterMaterialAbove = useMemo(() => {
     return new THREE.ShaderMaterial({
       uniforms: {
@@ -94,7 +84,6 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus }: Wat
     });
   }, [tileTexture, skyboxTexture, lightDir]);
   
-  // Water material - below
   const waterMaterialBelow = useMemo(() => {
     return new THREE.ShaderMaterial({
       uniforms: {
@@ -113,7 +102,6 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus }: Wat
     });
   }, [tileTexture, skyboxTexture, lightDir]);
   
-  // Pool geometry & material
   const poolGeometry = useMemo(() => {
     const geo = new THREE.BoxGeometry(2, 1, 2);
     geo.translate(0, -0.5, 0);
@@ -136,7 +124,6 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus }: Wat
     });
   }, [tileTexture, lightDir]);
   
-  // Sphere geometry & material
   const sphereGeometry = useMemo(() => new THREE.IcosahedronGeometry(1, 3), []);
   
   const sphereMaterial = useMemo(() => {
@@ -153,7 +140,6 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus }: Wat
     });
   }, [lightDir]);
   
-  // Heatmap overlay material
   const heatmapMaterial = useMemo(() => {
     return new THREE.ShaderMaterial({
       uniforms: {
@@ -199,9 +185,6 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus }: Wat
     let waterTexture: THREE.Texture;
     
     if (useGPU) {
-      // WebGPU path: step compute, get DataTexture
-      
-      // Sphere displacement
       if (!oldSphereCenter.current.equals(sphereCenterRef.current)) {
         webgpu.setSphere(
           oldSphereCenter.current.x, oldSphereCenter.current.y, oldSphereCenter.current.z,
@@ -213,19 +196,16 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus }: Wat
       webgpu.step();
       waterTexture = webgpu.waterTexture;
     } else {
-      // WebGL fallback
       webglSim.stepSimulation();
       webglSim.updateNormals();
       waterTexture = webglSim.getWaterTexture();
     }
     
-    // Update caustics
     caustics.updateCaustics(waterTexture, sphereCenterRef.current, sphereRadius, lightDir);
     const causticsTexture = caustics.getCausticsTexture();
     
     const cameraPos = camera.position.clone();
     
-    // Update water materials
     [waterMaterialAbove, waterMaterialBelow].forEach(mat => {
       mat.uniforms.tWater.value = waterTexture;
       mat.uniforms.tCaustics.value = causticsTexture;
@@ -233,7 +213,6 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus }: Wat
       mat.uniforms.sphereCenter.value.copy(sphereCenterRef.current);
     });
     
-    // Update pool & sphere materials
     poolMaterial.uniforms.tWater.value = waterTexture;
     poolMaterial.uniforms.tCaustics.value = causticsTexture;
     poolMaterial.uniforms.sphereCenter.value.copy(sphereCenterRef.current);
@@ -242,7 +221,6 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus }: Wat
     sphereMaterial.uniforms.tCaustics.value = causticsTexture;
     sphereMaterial.uniforms.sphereCenter.value.copy(sphereCenterRef.current);
     
-    // Update heatmap overlay
     if (showHeatmap && useGPU) {
       heatmapMaterial.uniforms.tWater.value = waterTexture;
       heatmapMaterial.uniforms.tFields.value = webgpu.fieldTexture;
@@ -306,6 +284,7 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus }: Wat
         prevHitRef.current = intersectPoint.clone();
         planeNormalRef.current = camera.position.clone().sub(spherePos).normalize();
         velocityRef.current.set(0, 0, 0);
+        onSphereDragChange?.(true);
         return;
       }
     }
@@ -317,7 +296,7 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus }: Wat
       const addDropFn = useGPU ? webgpu.addDrop : webglSim.addDrop;
       addDropFn(x, z, 0.03, 0.02);
     }
-  }, [camera, pointer, raycaster, useGPU, webgpu, webglSim]);
+  }, [camera, pointer, raycaster, useGPU, webgpu, webglSim, onSphereDragChange]);
   
   const handlePointerMove = useCallback((event: any) => {
     if (!isDraggingRef.current) return;
@@ -366,9 +345,12 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus }: Wat
   }, [camera, pointer, raycaster, useGPU, webgpu, webglSim]);
   
   const handlePointerUp = useCallback(() => {
+    if (modeRef.current === MODE_MOVE_SPHERE) {
+      onSphereDragChange?.(false);
+    }
     isDraggingRef.current = false;
     modeRef.current = -1;
-  }, []);
+  }, [onSphereDragChange]);
   
   return (
     <group onPointerUp={handlePointerUp} onPointerLeave={handlePointerUp}>

@@ -1,9 +1,12 @@
-import { useState, Suspense } from 'react';
+import { useState, useRef, Suspense } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei';
 import { WaterScene } from '@/components/water';
 import { Button } from '@/components/ui/button';
-import { Droplets, RotateCcw, Layers, Cpu, Zap } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
+import { Droplets, RotateCcw, Layers, Cpu, Zap, Lock } from 'lucide-react';
+import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 
 function LoadingScreen() {
   return (
@@ -38,34 +41,43 @@ function InfoPanel({ isWebGPU }: { isWebGPU: boolean | null }) {
   );
 }
 
-function Controls({ onReset, showHeatmap, onToggleHeatmap, isWebGPU }: { 
+function Controls({ onReset, showHeatmap, onToggleHeatmap, isWebGPU, cameraLocked, onToggleCameraLock }: { 
   onReset: () => void;
   showHeatmap: boolean;
   onToggleHeatmap: () => void;
   isWebGPU: boolean | null;
+  cameraLocked: boolean;
+  onToggleCameraLock: () => void;
 }) {
   return (
-    <div className="absolute bottom-4 right-4 flex gap-2">
-      {isWebGPU && (
+    <div className="absolute bottom-4 right-4 flex flex-col gap-2 items-end">
+      <div className="flex items-center gap-2 p-2 rounded-lg bg-card/80 backdrop-blur-sm border border-border">
+        <Lock className="w-3.5 h-3.5 text-muted-foreground" />
+        <Label htmlFor="camera-lock" className="text-xs text-muted-foreground cursor-pointer">Lock Camera</Label>
+        <Switch id="camera-lock" checked={cameraLocked} onCheckedChange={onToggleCameraLock} />
+      </div>
+      <div className="flex gap-2">
+        {isWebGPU && (
+          <Button
+            variant={showHeatmap ? "default" : "secondary"}
+            size="sm"
+            onClick={onToggleHeatmap}
+            className="gap-2"
+          >
+            <Layers className="w-4 h-4" />
+            {showHeatmap ? 'Hide Fields' : 'Show Fields'}
+          </Button>
+        )}
         <Button
-          variant={showHeatmap ? "default" : "secondary"}
+          variant="secondary"
           size="sm"
-          onClick={onToggleHeatmap}
+          onClick={onReset}
           className="gap-2"
         >
-          <Layers className="w-4 h-4" />
-          {showHeatmap ? 'Hide Fields' : 'Show Fields'}
+          <RotateCcw className="w-4 h-4" />
+          Reset
         </Button>
-      )}
-      <Button
-        variant="secondary"
-        size="sm"
-        onClick={onReset}
-        className="gap-2"
-      >
-        <RotateCcw className="w-4 h-4" />
-        Reset
-      </Button>
+      </div>
     </div>
   );
 }
@@ -109,6 +121,12 @@ const Index = () => {
   const [resetKey, setResetKey] = useState(0);
   const [showHeatmap, setShowHeatmap] = useState(false);
   const [isWebGPU, setIsWebGPU] = useState<boolean | null>(null);
+  const [cameraLocked, setCameraLocked] = useState(false);
+  const [sphereDragging, setSphereDragging] = useState(false);
+  const controlsRef = useRef<OrbitControlsImpl>(null);
+
+  // Disable orbit controls when dragging sphere or camera is locked
+  const orbitEnabled = !cameraLocked && !sphereDragging;
 
   return (
     <div className="relative w-full h-full bg-background overflow-hidden">
@@ -130,6 +148,8 @@ const Index = () => {
         />
         
         <OrbitControls
+          ref={controlsRef}
+          enabled={orbitEnabled}
           enablePan={false}
           minDistance={1.5}
           maxDistance={15}
@@ -148,6 +168,7 @@ const Index = () => {
             onReady={() => setIsLoading(false)} 
             showHeatmap={showHeatmap}
             onWebGPUStatus={setIsWebGPU}
+            onSphereDragChange={setSphereDragging}
           />
         </Suspense>
       </Canvas>
@@ -163,6 +184,8 @@ const Index = () => {
             showHeatmap={showHeatmap}
             onToggleHeatmap={() => setShowHeatmap(p => !p)}
             isWebGPU={isWebGPU}
+            cameraLocked={cameraLocked}
+            onToggleCameraLock={() => setCameraLocked(p => !p)}
           />
         </>
       )}
