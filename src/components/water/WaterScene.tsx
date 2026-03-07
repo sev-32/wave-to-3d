@@ -228,36 +228,67 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus, onSph
       heatmapMaterial.uniforms.time.value = timeRef.current;
     }
     
-    // Sphere physics
+    // Sphere physics — realistic buoyancy, drag, and wave interaction
     if (modeRef.current !== MODE_MOVE_SPHERE) {
-      const gravity = new THREE.Vector3(0, -4, 0);
-      velocityRef.current.add(gravity.clone().multiplyScalar(delta));
+      const v = velocityRef.current;
+      const center = sphereCenterRef.current;
+      const waterSurfaceY = 0;
       
-      const newCenter = sphereCenterRef.current.clone().add(velocityRef.current.clone().multiplyScalar(delta));
+      // Gravity
+      const gravity = -9.8;
+      v.y += gravity * delta;
       
-      if (newCenter.y > 0 - sphereRadius && velocityRef.current.y > 0) {
-        velocityRef.current.y *= 0.5;
+      // Buoyancy (Archimedes): upward force proportional to submerged volume
+      const submergedDepth = Math.max(0, waterSurfaceY + sphereRadius - center.y);
+      const submergedFraction = Math.min(submergedDepth / (2 * sphereRadius), 1);
+      if (submergedFraction > 0) {
+        // Buoyant force = ρ_water * g * V_submerged (simplified)
+        const buoyancyForce = 14.0 * submergedFraction; // Slightly > gravity for floating
+        v.y += buoyancyForce * delta;
+        
+        // Water drag (quadratic drag proportional to speed)
+        const speed = v.length();
+        if (speed > 0.001) {
+          const dragCoeff = 2.5 * submergedFraction;
+          const dragDecel = Math.min(dragCoeff * speed * delta, 0.4);
+          v.multiplyScalar(1 - dragDecel);
+        }
+        
+        // Surface tension damping at water line
+        const distToSurface = Math.abs(center.y - waterSurfaceY);
+        if (distToSurface < sphereRadius * 0.3) {
+          v.y *= 0.96; // Extra damping near equilibrium
+        }
       }
       
+      // Air drag (much lighter)
+      if (submergedFraction === 0) {
+        v.multiplyScalar(0.999);
+      }
+      
+      const newCenter = center.clone().add(v.clone().multiplyScalar(delta));
+      
+      // Floor collision
       const minY = -1 + sphereRadius;
       if (newCenter.y < minY) {
         newCenter.y = minY;
-        velocityRef.current.y = -velocityRef.current.y * 0.3;
-        velocityRef.current.x *= 0.9;
-        velocityRef.current.z *= 0.9;
+        v.y = -v.y * 0.25;
+        v.x *= 0.85;
+        v.z *= 0.85;
       }
       
+      // Wall collisions
       const wallBound = 1 - sphereRadius;
       if (Math.abs(newCenter.x) > wallBound) {
         newCenter.x = Math.sign(newCenter.x) * wallBound;
-        velocityRef.current.x = -velocityRef.current.x * 0.3;
+        v.x = -v.x * 0.25;
       }
       if (Math.abs(newCenter.z) > wallBound) {
         newCenter.z = Math.sign(newCenter.z) * wallBound;
-        velocityRef.current.z = -velocityRef.current.z * 0.3;
+        v.z = -v.z * 0.25;
       }
       
-      newCenter.y = Math.min(10, newCenter.y);
+      newCenter.y = Math.min(5, newCenter.y);
       
       if (!useGPU && !newCenter.equals(oldSphereCenter.current)) {
         webglSim.moveSphere(oldSphereCenter.current, newCenter, sphereRadius);
