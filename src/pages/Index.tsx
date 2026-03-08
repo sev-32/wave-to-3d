@@ -116,7 +116,7 @@ function InfoPanel({ isWebGPU, phase }: { isWebGPU: boolean | null; phase: SimPh
   );
 }
 
-function Controls({ onReset, showHeatmap, onToggleHeatmap, isWebGPU, cameraLocked, onToggleCameraLock, paused, onTogglePause }: { 
+const Controls = forwardRef<HTMLDivElement, { 
   onReset: () => void;
   showHeatmap: boolean;
   onToggleHeatmap: () => void;
@@ -125,9 +125,9 @@ function Controls({ onReset, showHeatmap, onToggleHeatmap, isWebGPU, cameraLocke
   onToggleCameraLock: () => void;
   paused: boolean;
   onTogglePause: () => void;
-}) {
+}>(({ onReset, showHeatmap, onToggleHeatmap, isWebGPU, cameraLocked, onToggleCameraLock, paused, onTogglePause }, ref) => {
   return (
-    <div className="absolute bottom-4 right-4 flex flex-col gap-2 items-end">
+    <div ref={ref} className="absolute bottom-4 right-4 flex flex-col gap-2 items-end">
       <div className="flex items-center gap-2 p-2 rounded-lg bg-card/80 backdrop-blur-sm border border-border">
         <Lock className="w-3.5 h-3.5 text-muted-foreground" />
         <Label htmlFor="camera-lock" className="text-xs text-muted-foreground cursor-pointer">Lock Camera</Label>
@@ -166,7 +166,7 @@ function Controls({ onReset, showHeatmap, onToggleHeatmap, isWebGPU, cameraLocke
       </div>
     </div>
   );
-}
+});
 
 function FieldLegend({ visible }: { visible: boolean }) {
   if (!visible) return null;
