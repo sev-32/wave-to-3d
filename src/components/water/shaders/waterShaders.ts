@@ -38,7 +38,7 @@ export const dropFragmentShader = `
   }
 `;
 
-// Update shader - wave propagation simulation
+// Update shader - isotropic wave propagation simulation
 export const updateFragmentShader = `
   precision highp float;
   
@@ -49,24 +49,25 @@ export const updateFragmentShader = `
   void main() {
     vec4 info = texture2D(tWater, vUv);
     
-    // Sample neighboring heights
     vec2 dx = vec2(delta.x, 0.0);
     vec2 dy = vec2(0.0, delta.y);
     
-    float average = (
-      texture2D(tWater, vUv - dx).r +
-      texture2D(tWater, vUv - dy).r +
-      texture2D(tWater, vUv + dx).r +
-      texture2D(tWater, vUv + dy).r
-    ) * 0.25;
+    float left  = texture2D(tWater, vUv - dx).r;
+    float right = texture2D(tWater, vUv + dx).r;
+    float up    = texture2D(tWater, vUv - dy).r;
+    float down  = texture2D(tWater, vUv + dy).r;
     
-    // Update velocity (g channel)
-    info.g += (average - info.r) * 2.0;
+    float ul = texture2D(tWater, vUv - dx - dy).r;
+    float ur = texture2D(tWater, vUv + dx - dy).r;
+    float dl = texture2D(tWater, vUv - dx + dy).r;
+    float dr = texture2D(tWater, vUv + dx + dy).r;
     
-    // Apply damping
-    info.g *= 0.995;
+    float average = (left + right + up + down) * 0.20
+                  + (ul + ur + dl + dr) * 0.05;
     
-    // Update height
+    // Softer propagation to avoid over-energetic cavity rebound
+    info.g += (average - info.r) * 1.65;
+    info.g *= 0.996;
     info.r += info.g;
     
     gl_FragColor = info;
