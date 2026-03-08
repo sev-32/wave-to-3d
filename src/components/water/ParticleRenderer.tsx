@@ -10,7 +10,7 @@ import * as THREE from 'three';
 
 interface ParticleRendererProps {
   positions: Float32Array;
-  count: number;
+  count: number | (() => number);
   maxParticles: number;
   light?: THREE.Vector3;
 }
