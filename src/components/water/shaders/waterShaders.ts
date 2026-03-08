@@ -96,7 +96,7 @@ export const normalFragmentShader = `
   }
 `;
 
-// Sphere displacement shader - handles sphere movement in water
+// Sphere displacement shader - physically conservative coupling
 export const sphereDisplacementFragmentShader = `
   precision highp float;
   
@@ -107,20 +107,48 @@ export const sphereDisplacementFragmentShader = `
   varying vec2 vUv;
   
   float volumeInSphere(vec3 center) {
-    vec3 toCenter = vec3(vUv.x * 2.0 - 1.0, 0.0, vUv.y * 2.0 - 1.0) - center;
-    float t = length(toCenter) / radius;
-    float dy = exp(-pow(t * 1.5, 6.0));
-    float ymin = min(0.0, center.y - dy);
-    float ymax = min(max(0.0, center.y + dy), ymin + 2.0 * dy);
-    return (ymax - ymin) * 0.1;
+    vec2 world = vec2(vUv.x * 2.0 - 1.0, vUv.y * 2.0 - 1.0);
+    float dist = length(world - center.xz);
+    float horizontalDist = dist / radius;
+    if (horizontalDist > 1.5) return 0.0;
+
+    float cap = max(0.0, 1.0 - horizontalDist * horizontalDist);
+    float shell = sqrt(cap);
+    float sphereTop = center.y + radius * shell;
+    float sphereBot = center.y - radius * shell;
+
+    float submergedTop = min(sphereTop, 0.0);
+    float submergedBot = max(sphereBot, -1.0);
+    if (submergedTop <= submergedBot) return 0.0;
+
+    float displacement = (submergedTop - submergedBot) * cap * 0.045;
+    return min(displacement, 0.016);
   }
   
   void main() {
     vec4 info = texture2D(tWater, vUv);
     
-    // Add volume displacement
     info.r += volumeInSphere(oldCenter);
     info.r -= volumeInSphere(newCenter);
+
+    vec2 vel = newCenter.xz - oldCenter.xz;
+    float speed = length(vel);
+    if (speed > 0.0001) {
+      vec2 world = vec2(vUv.x * 2.0 - 1.0, vUv.y * 2.0 - 1.0);
+      vec2 toPoint = world - newCenter.xz;
+      float dist = length(toPoint);
+      float normDist = dist / radius;
+
+      if (normDist < 3.0 && normDist > 0.1) {
+        vec2 velDir = normalize(vel + vec2(0.0001));
+        vec2 pointDir = normalize(toPoint + vec2(0.0001));
+        float alignment = dot(velDir, pointDir);
+        float bowWave = alignment * speed * 1.2;
+        float falloff = exp(-normDist * 1.5);
+        float waveAdd = bowWave * falloff * 0.035;
+        info.g += clamp(waveAdd, -0.022, 0.022);
+      }
+    }
     
     gl_FragColor = info;
   }
