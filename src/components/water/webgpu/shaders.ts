@@ -358,7 +358,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let M = field.z;
   
   // Emit from high-R, high-M regions with energy threshold
-  if (R < 0.3 || M < 0.08) { return; }
+  if (R < 0.15 || M < 0.05) { return; }
   
   let f2 = fields2[i];
   let Ux = f2.x;
