@@ -385,8 +385,8 @@ export class WaterGPU {
       this.swapField();
     }
 
-    // 6. Emit particles (every 2nd frame for denser emission)
-    if (this.frameCount % 2 === 0) {
+    // 6. Emit particles (every frame for responsive impact spray)
+    {
       const bg = this.device.createBindGroup({
         layout: this.emitLayout,
         entries: [

@@ -311,20 +311,22 @@ export function WaterScene({
         const impactX = newCenter.x;
         const impactZ = newCenter.z;
         
-        // Fire a strong radial drop at impact point proportional to impact velocity
-        // This creates the correct radial wave pattern (not sine)
+        // Controlled radial impulse (primary cavity + gentle rebound ring)
         const addDropFn = useGPU ? webgpu.addDrop : webglSim.addDrop;
-        const strength = Math.min(impactSpeed * 0.015, 0.08); // Scale with impact velocity
-        addDropFn(impactX, impactZ, sphereRadius * 1.2, -strength); // Negative = downward push
-        
-        // Ring of secondary drops around impact point for crown formation
-        const ringCount = 8;
+        const strength = THREE.MathUtils.clamp(impactSpeed * 0.006, 0.008, 0.03);
+
+        // Primary cavity at contact point
+        addDropFn(impactX, impactZ, sphereRadius * 0.9, -strength);
+
+        // Secondary crown ring (smaller/lighter to avoid oversized sine-like response)
+        const ringCount = 12;
+        const ringRadius = sphereRadius * 1.05;
         for (let i = 0; i < ringCount; i++) {
           const angle = (i / ringCount) * Math.PI * 2;
-          const rx = impactX + Math.cos(angle) * sphereRadius * 1.5;
-          const rz = impactZ + Math.sin(angle) * sphereRadius * 1.5;
-          if (Math.abs(rx) < 1 && Math.abs(rz) < 1) {
-            addDropFn(rx, rz, sphereRadius * 0.4, strength * 0.6); // Upward ring
+          const rx = impactX + Math.cos(angle) * ringRadius;
+          const rz = impactZ + Math.sin(angle) * ringRadius;
+          if (Math.abs(rx) < 0.98 && Math.abs(rz) < 0.98) {
+            addDropFn(rx, rz, sphereRadius * 0.16, strength * 0.18);
           }
         }
         

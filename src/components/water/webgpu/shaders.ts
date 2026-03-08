@@ -83,8 +83,17 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let right = waterIn[z * N + rx].x;
   let up    = waterIn[uz * N + x].x;
   let down  = waterIn[dz * N + x].x;
-  
-  let avg = (left + right + up + down) * 0.25;
+
+  let ul = waterIn[uz * N + lx].x;
+  let ur = waterIn[uz * N + rx].x;
+  let dl = waterIn[dz * N + lx].x;
+  let dr = waterIn[dz * N + rx].x;
+
+  // 8-neighbor isotropic stencil reduces axis-biased "sine" artifacts
+  let axialAvg = (left + right + up + down) * 0.20;
+  let diagAvg = (ul + ur + dl + dr) * 0.05;
+  let avg = axialAvg + diagAvg;
+
   info.y += (avg - info.x) * 2.0;
   info.y *= params.damping;
   info.x += info.y;
@@ -158,9 +167,9 @@ fn volumeInSphere(center: vec3f, uv: vec2f, radius: f32) -> f32 {
   
   if (submergedTop <= submergedBot) { return 0.0; }
   
-  // Stronger displacement — scaled with submersion depth
-  let displacement = (submergedTop - submergedBot) * cap * 0.15;
-  return min(displacement, 0.08);
+  // Balanced displacement to avoid oversized craters
+  let displacement = (submergedTop - submergedBot) * cap * 0.065;
+  return min(displacement, 0.03);
 }
 
 @compute @workgroup_size(16, 16)
@@ -201,9 +210,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       let isInWake = smoothstep(wakeAngle - 0.1, wakeAngle + 0.1, crossAlignment);
       let wakeFactor = isInWake * (1.0 - alignment) * 0.3;
       
-      // Much higher clamps for impact scenarios
-      let waveAdd = (bowWave * falloff + wakeFactor * speed * falloff) * 0.15;
-      info.y += clamp(waveAdd, -0.1, 0.1);
+      // Keep coupling energetic but stable for realistic crowns
+      let waveAdd = (bowWave * falloff + wakeFactor * speed * falloff) * 0.06;
+      info.y += clamp(waveAdd, -0.04, 0.04);
     }
   }
   
@@ -289,23 +298,24 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   var cooldown = max(0.0, prevField2.w - params.dt);
   
   // ---- Rupture Potential R with hysteresis ----
-  let R_ON: f32 = 0.20;
-  let R_OFF: f32 = 0.10;
-  let COOLDOWN_DURATION: f32 = 0.15;
+  let R_ON: f32 = 0.16;
+  let R_OFF: f32 = 0.07;
+  let COOLDOWN_DURATION: f32 = 0.12;
   
-  let wK = 0.20;
-  let wE = 0.40;
+  let wK = 0.24;
+  let wE = 0.36;
   let wS = 0.20;
   let wU = 0.20;
+
+  // Use symmetric energy (abs velocity) and moderated gains for stable heatmap behavior
+  let Ekin = abs(velocity);
+  let Rraw = wK * min(crestness * 0.08, 1.0)
+           + wE * min(Ekin * 4.0, 1.0)
+           + wS * min(slope * 0.9, 1.0)
+           + wU * min(Umag * 2.0, 1.0);
   
-  // Scale inputs more aggressively to capture impact events
-  let Rraw = wK * min(crestness * 0.3, 1.0) 
-           + wE * min(Eup * 8.0, 1.0) 
-           + wS * min(slope * 1.5, 1.0) 
-           + wU * min(Umag * 3.0, 1.0);
-  
-  let chargeRate = 8.0;
-  let R_decay = 2.0;
+  let chargeRate = 4.5;
+  let R_decay = 2.8;
   var R = prevField.x;
   
   // Suppress R charging during cooldown
@@ -392,23 +402,23 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let cooldown = f2.w;
   
   // R hysteresis gating — only emit from active rupture zones
-  let R_ON: f32 = 0.15;
-  let R_OFF: f32 = 0.08;
-  if (R < R_OFF || M < 0.02) { return; }
-  // Skip cooldown check for initial impacts (cooldown is short)
+  let R_ON: f32 = 0.12;
+  let R_OFF: f32 = 0.06;
+  if (R < R_OFF || M < 0.015) { return; }
   
   let waterInfo = water[i];
   let height = waterInfo.x;
   let velocity = waterInfo.y;
+  let kinetic = abs(velocity);
   
-  // Need some upward energy or strong rupture
-  if (velocity < 0.0001 && R < 0.3) { return; }
+  // Allow impact and rebound states to emit (not just upward velocity)
+  if (kinetic < 0.00004 && R < R_ON) { return; }
   
   // Pseudo-random
   let noise = fract(sin(f32(x) * 12.9898 + f32(z) * 78.233 + f32(atomicLoad(&counter[0])) * 0.1) * 43758.5453);
   
-  // Probability: higher R and M = more likely to emit
-  let emitProb = R * M * 2.0 + R * R;
+  // Probability weighted by rupture, kinetic energy, and available reservoir
+  let emitProb = clamp((R * 0.9 + kinetic * 25.0) * (0.25 + M * 0.9), 0.0, 0.85);
   if (noise > emitProb) { return; }
   
   let worldX = f32(x) / f32(N - 1u) * 2.0 - 1.0;
@@ -462,7 +472,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let throwScale = C * 4.0 * throwMul;
   
   let vx = Ux * throwScale + nx * liftScale * 0.4 + cos(noiseAngle) * spreadRadius;
-  let vy = ny * liftScale * 1.5 + max(velocity * 4.0, 0.3) + noise2 * 0.5;
+  let vy = ny * liftScale * 1.5 + max(abs(velocity) * 3.0, 0.35) + noise2 * 0.5;
   let vz = Uz * throwScale + nz * liftScale * 0.4 + sin(noiseAngle) * spreadRadius;
   
   // Variable mass: coherent regions produce heavier particles
