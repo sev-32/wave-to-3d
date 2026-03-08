@@ -142,7 +142,7 @@ export function ParticleRenderer({ positions, count, maxParticles, light }: Part
   const material = useMemo(() => {
     return new THREE.ShaderMaterial({
       uniforms: {
-        uPointSize: { value: 3.0 },
+        uPointSize: { value: 4.0 },
         uTime: { value: 0 },
         uLightDir: { value: light || new THREE.Vector3(0.5, 0.7, -0.3).normalize() },
       },
@@ -151,7 +151,10 @@ export function ParticleRenderer({ positions, count, maxParticles, light }: Part
       transparent: true,
       depthWrite: false,
       depthTest: true,
-      blending: THREE.NormalBlending,
+      blending: THREE.CustomBlending,
+      blendEquation: THREE.AddEquation,
+      blendSrc: THREE.OneFactor,
+      blendDst: THREE.OneMinusSrcAlphaFactor,
     });
   }, [light]);
   
