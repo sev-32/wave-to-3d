@@ -304,8 +304,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
            + wS * min(slope * 1.5, 1.0) 
            + wU * min(Umag * 3.0, 1.0);
   
-  let chargeRate = 4.0;
-  let R_decay = 2.5;
+  let chargeRate = 8.0;
+  let R_decay = 2.0;
   var R = prevField.x;
   
   // Suppress R charging during cooldown
