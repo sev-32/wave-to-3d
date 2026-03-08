@@ -285,6 +285,39 @@ export class WaterGPU {
       ],
     });
 
+    // Parallel compaction layouts
+    this.markAliveLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 1, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 2, visibility: COMPUTE, buffer: { type: 'storage' } },
+      ],
+    });
+    this.prefixSumLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 1, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 2, visibility: COMPUTE, buffer: { type: 'storage' } },
+      ],
+    });
+    this.scatterCompactLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 1, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 3, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 4, visibility: COMPUTE, buffer: { type: 'storage' } },
+      ],
+    });
+    this.copyBackLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 1, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 3, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+      ],
+    });
+
     // Create pipelines
     this.dropPipeline = this.createPipeline(waterDropShader, this.waterRWUniformLayout);
     this.updatePipeline = this.createPipeline(waterUpdateShader, this.waterRWUniformLayout);
@@ -296,6 +329,11 @@ export class WaterGPU {
     this.applyFeedbackPipeline = this.createPipeline(applyFeedbackShader, this.applyFeedbackLayout);
     this.legacyFeedbackPipeline = this.createPipeline(particleFeedbackShader, this.legacyFeedbackLayout);
     this.resetParticlesPipeline = this.createPipeline(resetParticlesShader, this.particleResetLayout);
+    // Parallel compaction pipelines
+    this.markAlivePipeline = this.createPipeline(markAliveShader, this.markAliveLayout);
+    this.prefixSumPipeline = this.createPipeline(prefixSumShader, this.prefixSumLayout);
+    this.scatterCompactPipeline = this.createPipeline(scatterCompactShader, this.scatterCompactLayout);
+    this.copyBackPipeline = this.createPipeline(copyBackShader, this.copyBackLayout);
   }
 
   static async create(): Promise<WaterGPU | null> {
