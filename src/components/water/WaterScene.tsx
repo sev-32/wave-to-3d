@@ -333,8 +333,8 @@ export function WaterScene({
           }
         }
 
+        fallbackParticles.emitImpact(impactX, impactZ, impactSpeed);
         onSphereImpact?.();
-      }
       
       // Floor collision
       const minY = -1 + sphereRadius;
