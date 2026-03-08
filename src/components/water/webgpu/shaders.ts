@@ -211,9 +211,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       let isInWake = smoothstep(wakeAngle - 0.1, wakeAngle + 0.1, crossAlignment);
       let wakeFactor = isInWake * (1.0 - alignment) * 0.3;
       
-      // Keep coupling energetic but stable for realistic crowns
-      let waveAdd = (bowWave * falloff + wakeFactor * speed * falloff) * 0.06;
-      info.y += clamp(waveAdd, -0.04, 0.04);
+      // Keep coupling energetic but avoid oversized bow waves
+      let waveAdd = (bowWave * falloff + wakeFactor * speed * falloff) * 0.035;
+      info.y += clamp(waveAdd, -0.022, 0.022);
     }
   }
   
