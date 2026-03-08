@@ -113,9 +113,9 @@ const fluidFragmentShader = `
     color = mix(color, vec3(0.85, 0.92, 0.97), foamFactor * 0.4);
     
     // Alpha: young = dense, old = fading
-    float youngAlpha = 0.2;  // Dense fluid accumulation
-    float sprayAlpha = 0.11; // Lighter spray
-    float mistAlpha  = 0.045; // Very faint mist
+    float youngAlpha = 0.06;  // Dense fluid accumulation
+    float sprayAlpha = 0.03; // Lighter spray
+    float mistAlpha  = 0.02; // Very faint mist
     
     float baseAlpha = mix(youngAlpha, sprayAlpha, toSpray);
     baseAlpha = mix(baseAlpha, mistAlpha, toMist);
