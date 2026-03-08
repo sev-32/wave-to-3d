@@ -83,8 +83,17 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let right = waterIn[z * N + rx].x;
   let up    = waterIn[uz * N + x].x;
   let down  = waterIn[dz * N + x].x;
-  
-  let avg = (left + right + up + down) * 0.25;
+
+  let ul = waterIn[uz * N + lx].x;
+  let ur = waterIn[uz * N + rx].x;
+  let dl = waterIn[dz * N + lx].x;
+  let dr = waterIn[dz * N + rx].x;
+
+  // 8-neighbor isotropic stencil reduces axis-biased "sine" artifacts
+  let axialAvg = (left + right + up + down) * 0.20;
+  let diagAvg = (ul + ur + dl + dr) * 0.05;
+  let avg = axialAvg + diagAvg;
+
   info.y += (avg - info.x) * 2.0;
   info.y *= params.damping;
   info.x += info.y;
