@@ -484,13 +484,11 @@ export function WaterScene({
       />
       
       {/* Particles */}
-      {useGPU && (
-        <ParticleRenderer
-          positions={webgpu.particlePositions}
-          count={webgpu.activeParticles}
-          maxParticles={MAX_PARTICLES}
-        />
-      )}
+      <ParticleRenderer
+        positions={useGPU ? webgpu.particlePositions : fallbackParticles.particleData}
+        count={useGPU ? (() => webgpu.activeParticles) : fallbackParticles.getActiveParticles}
+        maxParticles={useGPU ? MAX_PARTICLES : fallbackParticles.maxParticles}
+      />
       
       {/* Skybox */}
       <mesh>
