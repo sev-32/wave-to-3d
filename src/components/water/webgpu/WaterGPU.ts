@@ -24,6 +24,10 @@ import {
   applyFeedbackShader,
   resetParticlesShader,
   particleFeedbackShader,
+  markAliveShader,
+  prefixSumShader,
+  scatterCompactShader,
+  copyBackShader,
 } from './shaders';
 
 const WATER_BUFFER_SIZE = GRID_SIZE * GRID_SIZE * 4 * 4;
