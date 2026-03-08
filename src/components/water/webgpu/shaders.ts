@@ -472,7 +472,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let throwScale = C * 4.0 * throwMul;
   
   let vx = Ux * throwScale + nx * liftScale * 0.4 + cos(noiseAngle) * spreadRadius;
-  let vy = ny * liftScale * 1.5 + max(velocity * 4.0, 0.3) + noise2 * 0.5;
+  let vy = ny * liftScale * 1.5 + max(abs(velocity) * 3.0, 0.35) + noise2 * 0.5;
   let vz = Uz * throwScale + nz * liftScale * 0.4 + sin(noiseAngle) * spreadRadius;
   
   // Variable mass: coherent regions produce heavier particles
