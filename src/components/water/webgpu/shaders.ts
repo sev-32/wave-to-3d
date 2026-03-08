@@ -89,12 +89,13 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let dl = waterIn[dz * N + lx].x;
   let dr = waterIn[dz * N + rx].x;
 
-  // 8-neighbor isotropic stencil reduces axis-biased "sine" artifacts
+  // 8-neighbor isotropic stencil reduces axis-biased artifacts
   let axialAvg = (left + right + up + down) * 0.20;
   let diagAvg = (ul + ur + dl + dr) * 0.05;
   let avg = axialAvg + diagAvg;
 
-  info.y += (avg - info.x) * 2.0;
+  // Slightly softer propagation to avoid over-energetic craters
+  info.y += (avg - info.x) * 1.65;
   info.y *= params.damping;
   info.x += info.y;
   
