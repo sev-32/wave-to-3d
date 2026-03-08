@@ -72,8 +72,9 @@ export function WaterScene({
       oldSphereCenter.current.set(0, sphereStartY, 0);
       velocityRef.current.set(0, 0, 0);
       hasImpacted.current = false;
+      fallbackParticles.reset();
     }
-  }, [sphereStartY]);
+  }, [sphereStartY, fallbackParticles]);
   
   useEffect(() => {
     if (webgpu.isReady) {
