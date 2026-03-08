@@ -187,7 +187,7 @@ export function ParticleRenderer({ positions, count, maxParticles, light }: Part
       fragmentShader: fluidFragmentShader,
       transparent: true,
       depthWrite: false,
-      depthTest: true,
+      depthTest: false,
       blending: THREE.CustomBlending,
       blendEquation: THREE.AddEquation,
       blendSrc: THREE.OneFactor,

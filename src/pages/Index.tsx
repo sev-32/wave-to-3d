@@ -259,7 +259,7 @@ const Index = () => {
           (window as any).__captureCanvas();
         }
       }, 40);
-    }, 180);
+    }, 120);
   }, [phase]);
 
   const handleResume = useCallback(() => {
