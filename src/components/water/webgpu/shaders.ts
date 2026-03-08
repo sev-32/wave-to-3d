@@ -298,23 +298,24 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   var cooldown = max(0.0, prevField2.w - params.dt);
   
   // ---- Rupture Potential R with hysteresis ----
-  let R_ON: f32 = 0.20;
-  let R_OFF: f32 = 0.10;
-  let COOLDOWN_DURATION: f32 = 0.15;
+  let R_ON: f32 = 0.16;
+  let R_OFF: f32 = 0.07;
+  let COOLDOWN_DURATION: f32 = 0.12;
   
-  let wK = 0.20;
-  let wE = 0.40;
+  let wK = 0.24;
+  let wE = 0.36;
   let wS = 0.20;
   let wU = 0.20;
+
+  // Use symmetric energy (abs velocity) and moderated gains for stable heatmap behavior
+  let Ekin = abs(velocity);
+  let Rraw = wK * min(crestness * 0.08, 1.0)
+           + wE * min(Ekin * 4.0, 1.0)
+           + wS * min(slope * 0.9, 1.0)
+           + wU * min(Umag * 2.0, 1.0);
   
-  // Scale inputs more aggressively to capture impact events
-  let Rraw = wK * min(crestness * 0.3, 1.0) 
-           + wE * min(Eup * 8.0, 1.0) 
-           + wS * min(slope * 1.5, 1.0) 
-           + wU * min(Umag * 3.0, 1.0);
-  
-  let chargeRate = 8.0;
-  let R_decay = 2.0;
+  let chargeRate = 4.5;
+  let R_decay = 2.8;
   var R = prevField.x;
   
   // Suppress R charging during cooldown
