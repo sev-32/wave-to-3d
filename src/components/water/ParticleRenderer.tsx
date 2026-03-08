@@ -1,11 +1,10 @@
 /**
  * Screen-Space Fluid Particle Renderer
- * Renders MLS-MPM particles as smooth billboards with water-like shading,
- * mimicking the screen-space fluid rendering technique from the splash reference.
- * Uses THREE.Points with custom shaders for metaball-like blending.
+ * Phase 1: World-space sizing, Gaussian density splatting, age-based visual transition.
+ * Particles are tiny and only visible through density accumulation.
  */
 
-import { useRef, useMemo, useEffect } from 'react';
+import { useRef, useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 
@@ -13,11 +12,13 @@ interface ParticleRendererProps {
   positions: Float32Array;
   count: number;
   maxParticles: number;
-  waterTexture?: THREE.Texture;
   light?: THREE.Vector3;
 }
 
-// Vertex shader: billboard particles in screen space with size attenuation
+// World-space particle radius in world units
+// Pool is 2 units wide, particle ≈ 0.4% of pool width
+const PARTICLE_WORLD_RADIUS = 0.008;
+
 const fluidVertexShader = `
   precision highp float;
   
@@ -29,28 +30,35 @@ const fluidVertexShader = `
   varying float vMass;
   varying float vDepth;
   varying vec3 vVelocity;
-  varying vec3 vWorldPos;
+  varying float vSpeed;
   
-  uniform float uPointSize;
+  uniform float uWorldRadius;
+  uniform float uResolutionY;
+  uniform float uFov; // radians
   uniform float uTime;
   
   void main() {
     vAge = aAge;
     vMass = aMass;
     vVelocity = aVelocity;
-    vWorldPos = position;
     
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
     vDepth = -mvPosition.z;
+    vSpeed = length(aVelocity);
     
-    // Size attenuation
-    float ageFactor = max(0.05, 1.0 - aAge * 0.25);
-    float sizeBase = uPointSize * ageFactor;
+    // World-space sizing: consistent scale regardless of screen resolution
+    // Formula: pixelSize = (worldRadius * resY) / (-z * tan(fov/2))
+    float worldRadius = uWorldRadius;
     
-    float speed = length(aVelocity);
-    float speedBoost = 1.0 + min(speed * 0.15, 0.3);
+    // Slightly larger for fast particles (stretched splash)
+    float speedBoost = 1.0 + min(vSpeed * 0.1, 0.4);
+    // Slightly smaller for old particles
+    float ageShrink = max(0.3, 1.0 - aAge * 0.15);
     
-    gl_PointSize = sizeBase * speedBoost * (30.0 / -mvPosition.z);
+    float effectiveRadius = worldRadius * speedBoost * ageShrink;
+    float pixelSize = (effectiveRadius * uResolutionY) / (-mvPosition.z * tan(uFov * 0.5));
+    
+    gl_PointSize = max(1.0, pixelSize);
     gl_Position = projectionMatrix * mvPosition;
     
     // Hide inactive particles
@@ -61,7 +69,6 @@ const fluidVertexShader = `
   }
 `;
 
-// Fragment shader: smooth metaball-like circle with water shading
 const fluidFragmentShader = `
   precision highp float;
   
@@ -69,50 +76,78 @@ const fluidFragmentShader = `
   varying float vMass;
   varying float vDepth;
   varying vec3 vVelocity;
-  varying vec3 vWorldPos;
+  varying float vSpeed;
   
   uniform float uTime;
   uniform vec3 uLightDir;
   
-  const float IOR_AIR = 1.0;
-  const float IOR_WATER = 1.333;
-  
   void main() {
-    // Smooth circle with soft edges (metaball-like)
     vec2 coord = gl_PointCoord * 2.0 - 1.0;
     float r2 = dot(coord, coord);
     
-    // Soft gaussian blob - key to fluid look
     if (r2 > 1.0) discard;
     
-    // Gaussian kernel for smooth density splatting (like SPH/MLS-MPM rendering)
-    float weight = exp(-r2 * 4.0);
+    // Gaussian kernel for smooth density splatting
+    float weight = exp(-r2 * 3.5);
     
-    float speed = length(vVelocity);
-    float ageFactor = clamp(vAge * 0.3, 0.0, 1.0);
+    // ---- Age-based visual transition ----
+    // Age 0–0.3s: Dense fluid blob (blue-tinted, high density)
+    // Age 0.3–1.0s: White spray (high scatter)
+    // Age 1.0–2.5s: Fading mist (low alpha, diffuse)
     
-    // Translucent water tint - NOT opaque spheres
-    vec3 waterTint = vec3(0.2, 0.5, 0.75);
-    vec3 foamTint = vec3(0.6, 0.8, 0.95);
+    float ageFrac = vAge;
     
-    float foamFactor = smoothstep(0.3, 2.0, speed);
-    vec3 color = mix(waterTint, foamTint, foamFactor * 0.5 + ageFactor * 0.2);
+    // Color transition
+    vec3 fluidColor = vec3(0.15, 0.45, 0.7);  // Deep water blue
+    vec3 sprayColor = vec3(0.7, 0.85, 0.95);  // White-blue spray
+    vec3 mistColor  = vec3(0.8, 0.9, 0.95);   // Near-white mist
     
-    // Very low alpha - particles overlap and accumulate to form fluid density
-    float baseAlpha = mix(0.12, 0.04, ageFactor);
-    float finalAlpha = weight * baseAlpha;
+    float toSpray = smoothstep(0.2, 0.6, ageFrac);
+    float toMist  = smoothstep(0.8, 1.5, ageFrac);
     
+    vec3 color = mix(fluidColor, sprayColor, toSpray);
+    color = mix(color, mistColor, toMist);
+    
+    // Speed-based foam
+    float foamFactor = smoothstep(0.3, 2.0, vSpeed);
+    color = mix(color, vec3(0.85, 0.92, 0.97), foamFactor * 0.4);
+    
+    // Alpha: young = dense, old = fading
+    float youngAlpha = 0.08;  // Dense fluid accumulation
+    float sprayAlpha = 0.04;  // Lighter spray
+    float mistAlpha  = 0.015; // Very faint mist
+    
+    float baseAlpha = mix(youngAlpha, sprayAlpha, toSpray);
+    baseAlpha = mix(baseAlpha, mistAlpha, toMist);
+    
+    // Mass-weighted: heavier particles contribute more
+    baseAlpha *= vMass * 1.5;
+    
+    // Final fade at end of life
+    float lifeFade = 1.0 - smoothstep(1.8, 2.5, ageFrac);
+    
+    float finalAlpha = weight * baseAlpha * lifeFade;
+    
+    // Simple pseudo-normal from point coord for specular hint
+    vec3 pointNormal = normalize(vec3(coord, sqrt(max(0.0, 1.0 - r2))));
+    float specular = pow(max(0.0, dot(reflect(-uLightDir, pointNormal), vec3(0.0, 0.0, 1.0))), 16.0);
+    color += specular * 0.15 * (1.0 - toMist);
+    
+    // Fresnel-like edge brightening for fluid particles
+    float fresnel = pow(1.0 - sqrt(max(0.0, 1.0 - r2)), 2.0);
+    color += fresnel * 0.1 * (1.0 - toSpray);
+    
+    // Premultiplied alpha output
     gl_FragColor = vec4(color * finalAlpha, finalAlpha);
   }
 `;
 
 export function ParticleRenderer({ positions, count, maxParticles, light }: ParticleRendererProps) {
   const pointsRef = useRef<THREE.Points>(null);
-  const { camera } = useThree();
+  const { camera, size } = useThree();
   
   const maxRender = maxParticles / 2;
   
-  // Create geometry with custom attributes
   const { geometry, posAttr, ageAttr, massAttr, velAttr } = useMemo(() => {
     const geo = new THREE.BufferGeometry();
     const pos = new Float32Array(maxRender * 3);
@@ -142,7 +177,9 @@ export function ParticleRenderer({ positions, count, maxParticles, light }: Part
   const material = useMemo(() => {
     return new THREE.ShaderMaterial({
       uniforms: {
-        uPointSize: { value: 4.0 },
+        uWorldRadius: { value: PARTICLE_WORLD_RADIUS },
+        uResolutionY: { value: 1 },
+        uFov: { value: 1 },
         uTime: { value: 0 },
         uLightDir: { value: light || new THREE.Vector3(0.5, 0.7, -0.3).normalize() },
       },
@@ -161,13 +198,18 @@ export function ParticleRenderer({ positions, count, maxParticles, light }: Part
   useFrame((state) => {
     const actualCount = Math.min(count, maxRender);
     
+    // Update camera-dependent uniforms
+    const cam = camera as THREE.PerspectiveCamera;
+    material.uniforms.uResolutionY.value = size.height;
+    material.uniforms.uFov.value = cam.fov * Math.PI / 180;
+    
     const posArray = posAttr.array as Float32Array;
     const ageArray = ageAttr.array as Float32Array;
     const massArray = massAttr.array as Float32Array;
     const velArray = velAttr.array as Float32Array;
     
     for (let i = 0; i < actualCount; i++) {
-      const pi = i * 8; // 2 vec4f per particle = 8 floats
+      const pi = i * 8;
       posArray[i * 3]     = positions[pi];
       posArray[i * 3 + 1] = positions[pi + 1];
       posArray[i * 3 + 2] = positions[pi + 2];
@@ -178,7 +220,6 @@ export function ParticleRenderer({ positions, count, maxParticles, light }: Part
       ageArray[i]         = positions[pi + 7];
     }
     
-    // Zero out remaining
     for (let i = actualCount; i < maxRender; i++) {
       posArray[i * 3] = 0;
       posArray[i * 3 + 1] = -100;
@@ -193,7 +234,6 @@ export function ParticleRenderer({ positions, count, maxParticles, light }: Part
     velAttr.needsUpdate = true;
     
     geometry.setDrawRange(0, actualCount);
-    
     material.uniforms.uTime.value = state.clock.elapsedTime;
   });
   
