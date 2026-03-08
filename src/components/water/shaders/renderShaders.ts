@@ -9,6 +9,8 @@ export const waterSurfaceVertexShader = `
   precision highp float;
   
   uniform sampler2D tWater;
+  uniform vec3 sphereCenter;
+  uniform float sphereRadius;
   
   varying vec3 vPosition;
   varying vec2 vUv;
@@ -22,6 +24,26 @@ export const waterSurfaceVertexShader = `
     // Displace vertex by water height
     vec3 pos = position;
     pos.y += info.r;
+    
+    // SDF sphere constraint: push water mesh above sphere boundary
+    vec3 worldPos = pos;
+    vec3 toVertex = worldPos - sphereCenter;
+    float dist = length(toVertex);
+    if (dist < sphereRadius * 1.05 && dist > 0.001) {
+      // Push vertex outward along the SDF gradient to sit on sphere surface
+      float penetration = sphereRadius * 1.05 - dist;
+      if (penetration > 0.0) {
+        vec3 pushDir = normalize(toVertex);
+        // Only push upward/outward, don't pull water down
+        float pushAmount = penetration * smoothstep(0.0, sphereRadius * 0.5, penetration);
+        pos += pushDir * pushAmount;
+        // Ensure water is at least at sphere top in the overlap zone
+        float sphereTopAtXZ = sphereCenter.y + sqrt(max(0.0, sphereRadius * sphereRadius - 
+          (worldPos.x - sphereCenter.x) * (worldPos.x - sphereCenter.x) - 
+          (worldPos.z - sphereCenter.z) * (worldPos.z - sphereCenter.z)));
+        pos.y = max(pos.y, sphereTopAtXZ + 0.002);
+      }
+    }
     
     vPosition = pos;
     
