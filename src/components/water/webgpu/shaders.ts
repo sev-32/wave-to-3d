@@ -146,7 +146,7 @@ fn volumeInSphere(center: vec3f, uv: vec2f, radius: f32) -> f32 {
   let dist = length(worldPos.xz - center.xz);
   let horizontalDist = dist / radius;
   
-  if (horizontalDist > 1.3) { return 0.0; }
+  if (horizontalDist > 1.5) { return 0.0; }
   
   let cap = max(0.0, 1.0 - horizontalDist * horizontalDist);
   let sphereTop = center.y + radius * sqrt(cap);
@@ -158,8 +158,9 @@ fn volumeInSphere(center: vec3f, uv: vec2f, radius: f32) -> f32 {
   
   if (submergedTop <= submergedBot) { return 0.0; }
   
-  let displacement = (submergedTop - submergedBot) * cap * 0.04;
-  return min(displacement, 0.02);
+  // Stronger displacement — scaled with submersion depth
+  let displacement = (submergedTop - submergedBot) * cap * 0.15;
+  return min(displacement, 0.08);
 }
 
 @compute @workgroup_size(16, 16)
