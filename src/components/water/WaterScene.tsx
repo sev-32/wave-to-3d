@@ -304,33 +304,37 @@ export function WaterScene({
       
       const newCenter = center.clone().add(v.clone().multiplyScalar(delta));
       
-      // Detect impact: sphere crosses water surface — fire strong radial drops
+      // Detect impact: sphere crosses water surface — inject smooth cavity + annular rebound
       if (!hasImpacted.current && prevY > sphereRadius && newCenter.y <= sphereRadius) {
         hasImpacted.current = true;
         const impactSpeed = Math.abs(v.y);
         const impactX = newCenter.x;
         const impactZ = newCenter.z;
-        
-        // Controlled radial impulse (primary cavity + gentle rebound ring)
+
         const addDropFn = useGPU ? webgpu.addDrop : webglSim.addDrop;
-        const strength = THREE.MathUtils.clamp(impactSpeed * 0.006, 0.008, 0.03);
+        const strength = THREE.MathUtils.clamp(impactSpeed * 0.0035, 0.004, 0.016);
 
-        // Primary cavity at contact point
-        addDropFn(impactX, impactZ, sphereRadius * 0.9, -strength);
+        // Primary cavity (smaller + softer)
+        addDropFn(impactX, impactZ, sphereRadius * 0.72, -strength);
 
-        // Secondary crown ring (smaller/lighter to avoid oversized sine-like response)
-        const ringCount = 12;
-        const ringRadius = sphereRadius * 1.05;
-        for (let i = 0; i < ringCount; i++) {
-          const angle = (i / ringCount) * Math.PI * 2;
+        // Broad rebound support to avoid discrete ring artifacts
+        addDropFn(impactX, impactZ, sphereRadius * 1.35, strength * 0.22);
+
+        // Smooth annular uplift (high sample count, low per-sample energy)
+        const ringSamples = 36;
+        const ringRadius = sphereRadius * 0.95;
+        const ringDropRadius = sphereRadius * 0.11;
+        const ringStrength = strength * 0.06;
+
+        for (let i = 0; i < ringSamples; i++) {
+          const angle = (i / ringSamples) * Math.PI * 2;
           const rx = impactX + Math.cos(angle) * ringRadius;
           const rz = impactZ + Math.sin(angle) * ringRadius;
           if (Math.abs(rx) < 0.98 && Math.abs(rz) < 0.98) {
-            addDropFn(rx, rz, sphereRadius * 0.16, strength * 0.18);
+            addDropFn(rx, rz, ringDropRadius, ringStrength);
           }
         }
-        
-        console.log(`💥 Impact! speed=${impactSpeed.toFixed(2)}, strength=${strength.toFixed(4)}`);
+
         onSphereImpact?.();
       }
       
