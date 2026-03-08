@@ -183,18 +183,12 @@ export function WaterScene({
   // Initialize
   useEffect(() => {
     if (!isInitialized.current && webgpu.isReady) {
-      const addDropFn = useGPU ? webgpu.addDrop : webglSim.addDrop;
-      for (let i = 0; i < 20; i++) {
-        const x = Math.random() * 2 - 1;
-        const z = Math.random() * 2 - 1;
-        const strength = (i % 2 === 0) ? 0.01 : -0.01;
-        addDropFn(x, z, 0.03, strength);
-      }
+      // Start from calm water so impact diagnostics are physically readable
       if (!useGPU) webglSim.updateNormals();
       isInitialized.current = true;
       onReady?.();
     }
-  }, [webgpu.isReady, useGPU, webgpu, webglSim, onReady]);
+  }, [webgpu.isReady, useGPU, webglSim, onReady]);
   
   // Main render loop
   useFrame((state, delta) => {
