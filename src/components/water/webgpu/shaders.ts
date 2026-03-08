@@ -299,26 +299,32 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   var cooldown = max(0.0, prevField2.w - params.dt);
   
   // ---- Rupture Potential R with hysteresis ----
-  let R_ON: f32 = 0.16;
-  let R_OFF: f32 = 0.07;
-  let COOLDOWN_DURATION: f32 = 0.12;
-  
-  let wK = 0.24;
-  let wE = 0.36;
-  let wS = 0.20;
-  let wU = 0.20;
+  let R_ON: f32 = 0.20;
+  let R_OFF: f32 = 0.10;
+  let COOLDOWN_DURATION: f32 = 0.14;
 
-  // Use symmetric energy (abs velocity) and moderated gains for stable heatmap behavior
+  let wK = 0.20;
+  let wE = 0.24;
+  let wS = 0.16;
+  let wU = 0.20;
+  let wD = 0.12;
+  let wI = 0.08;
+
   let Ekin = abs(velocity);
+  let compression = min(max(0.0, -divU) * 0.025, 1.0);
+  let impactMemory = min(Ekin * exp(-slope * 0.12) * 6.0, 1.0);
+
   let Rraw = wK * min(crestness * 0.08, 1.0)
-           + wE * min(Ekin * 4.0, 1.0)
-           + wS * min(slope * 0.9, 1.0)
-           + wU * min(Umag * 2.0, 1.0);
-  
-  let chargeRate = 4.5;
-  let R_decay = 2.8;
+           + wE * min(Ekin * 3.6, 1.0)
+           + wS * min(slope * 0.75, 1.0)
+           + wU * min(Umag * 1.8, 1.0)
+           + wD * compression
+           + wI * impactMemory;
+
+  let chargeRate = 5.0;
+  let R_decay = 3.0;
   var R = prevField.x;
-  
+
   // Suppress R charging during cooldown
   let chargeMultiplier = select(1.0, 0.0, cooldown > 0.001);
   R += (chargeRate * clamp(Rraw, 0.0, 1.0) * chargeMultiplier - R_decay * R) * params.dt;
