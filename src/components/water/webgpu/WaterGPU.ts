@@ -70,6 +70,11 @@ export class WaterGPU {
   private particleBuffer: any;
   private counterBuffer: any;
   private feedbackBuffer: any;
+  // Parallel compaction buffers
+  private aliveFlagsBuffer: any;
+  private prefixSumsBuffer: any;
+  private totalAliveBuffer: any;
+  private tempParticleBuffer: any;
   
   // Double-buffered staging
   private stagingSets: Array<{
