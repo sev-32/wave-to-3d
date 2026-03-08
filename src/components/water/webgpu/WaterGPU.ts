@@ -117,6 +117,11 @@ export class WaterGPU {
   private applyFeedbackLayout: any;
   private legacyFeedbackLayout: any;
   private particleResetLayout: any;
+  // Parallel compaction layouts
+  private markAliveLayout: any;
+  private prefixSumLayout: any;
+  private scatterCompactLayout: any;
+  private copyBackLayout: any;
 
   private dropQueue: Drop[] = [];
   private sphereState: SphereState | null = null;
