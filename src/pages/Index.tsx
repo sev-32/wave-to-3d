@@ -1,4 +1,4 @@
-import { useState, useRef, Suspense, useCallback, useEffect } from 'react';
+import { useState, useRef, Suspense, useCallback, useEffect, forwardRef } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei';
 import { WaterScene } from '@/components/water';
@@ -39,14 +39,14 @@ function DropPrompt({ onClick }: { onClick: () => void }) {
   );
 }
 
-function FrozenOverlay({ onResume, onReset, onCapture, capturedImage }: { 
-  onResume: () => void; 
+const FrozenOverlay = forwardRef<HTMLDivElement, {
+  onResume: () => void;
   onReset: () => void;
   onCapture: () => void;
   capturedImage: string | null;
-}) {
+}>(({ onResume, onReset, onCapture, capturedImage }, ref) => {
   return (
-    <div className="absolute inset-0 z-20">
+    <div ref={ref} className="absolute inset-0 z-20">
       {/* Frozen border indicator */}
       <div className="absolute inset-0 pointer-events-none border-4 border-primary/60 rounded-sm" />
       <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-2 px-4 py-2 rounded-full bg-primary/90 text-primary-foreground text-sm font-semibold shadow-lg">
@@ -81,7 +81,7 @@ function FrozenOverlay({ onResume, onReset, onCapture, capturedImage }: {
       )}
     </div>
   );
-}
+});
 
 function InfoPanel({ isWebGPU, phase }: { isWebGPU: boolean | null; phase: SimPhase }) {
   return (
@@ -116,7 +116,7 @@ function InfoPanel({ isWebGPU, phase }: { isWebGPU: boolean | null; phase: SimPh
   );
 }
 
-function Controls({ onReset, showHeatmap, onToggleHeatmap, isWebGPU, cameraLocked, onToggleCameraLock, paused, onTogglePause }: { 
+const Controls = forwardRef<HTMLDivElement, { 
   onReset: () => void;
   showHeatmap: boolean;
   onToggleHeatmap: () => void;
@@ -125,9 +125,9 @@ function Controls({ onReset, showHeatmap, onToggleHeatmap, isWebGPU, cameraLocke
   onToggleCameraLock: () => void;
   paused: boolean;
   onTogglePause: () => void;
-}) {
+}>(({ onReset, showHeatmap, onToggleHeatmap, isWebGPU, cameraLocked, onToggleCameraLock, paused, onTogglePause }, ref) => {
   return (
-    <div className="absolute bottom-4 right-4 flex flex-col gap-2 items-end">
+    <div ref={ref} className="absolute bottom-4 right-4 flex flex-col gap-2 items-end">
       <div className="flex items-center gap-2 p-2 rounded-lg bg-card/80 backdrop-blur-sm border border-border">
         <Lock className="w-3.5 h-3.5 text-muted-foreground" />
         <Label htmlFor="camera-lock" className="text-xs text-muted-foreground cursor-pointer">Lock Camera</Label>
@@ -166,12 +166,12 @@ function Controls({ onReset, showHeatmap, onToggleHeatmap, isWebGPU, cameraLocke
       </div>
     </div>
   );
-}
+});
 
-function FieldLegend({ visible }: { visible: boolean }) {
+const FieldLegend = forwardRef<HTMLDivElement, { visible: boolean }>(({ visible }, ref) => {
   if (!visible) return null;
   return (
-    <div className="absolute top-4 right-4 p-3 rounded-lg bg-card/80 backdrop-blur-sm border border-border">
+    <div ref={ref} className="absolute top-4 right-4 p-3 rounded-lg bg-card/80 backdrop-blur-sm border border-border">
       <h4 className="text-xs font-semibold text-foreground mb-2 flex items-center gap-1.5">
         <Cpu className="w-3 h-3" />
         Surface Intent Fields
@@ -200,7 +200,7 @@ function FieldLegend({ visible }: { visible: boolean }) {
       </div>
     </div>
   );
-}
+});
 
 // Component to capture canvas screenshots
 function CanvasCapture({ onCapture }: { onCapture: (dataUrl: string) => void }) {
@@ -249,7 +249,7 @@ const Index = () => {
     if (phase !== 'dropping') return;
     setPhase('splashing');
     
-    // Auto-freeze after 0.4s to capture the splash
+    // Auto-freeze shortly after impact to capture crown onset
     impactTimerRef.current = setTimeout(() => {
       setPaused(true);
       setPhase('frozen');
@@ -258,8 +258,8 @@ const Index = () => {
         if ((window as any).__captureCanvas) {
           (window as any).__captureCanvas();
         }
-      }, 50);
-    }, 400);
+      }, 40);
+    }, 120);
   }, [phase]);
 
   const handleResume = useCallback(() => {

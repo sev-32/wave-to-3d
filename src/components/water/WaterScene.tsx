@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { useWebGPUWater } from './useWebGPUWater';
 import { useWaterSimulation } from './useWaterSimulation';
 import { useCaustics } from './useCaustics';
+import { useFallbackParticles } from './useFallbackParticles';
 import { createTileTexture, createSkyboxTexture } from './textures';
 import { ParticleRenderer } from './ParticleRenderer';
 import { MAX_PARTICLES } from './webgpu';
@@ -42,6 +43,7 @@ export function WaterScene({
   const webgpu = useWebGPUWater();
   const webglSim = useWaterSimulation();
   const caustics = useCaustics();
+  const fallbackParticles = useFallbackParticles();
   
   const useGPU = webgpu.isWebGPU && webgpu.isReady;
   
@@ -70,8 +72,9 @@ export function WaterScene({
       oldSphereCenter.current.set(0, sphereStartY, 0);
       velocityRef.current.set(0, 0, 0);
       hasImpacted.current = false;
+      fallbackParticles.reset();
     }
-  }, [sphereStartY]);
+  }, [sphereStartY, fallbackParticles]);
   
   useEffect(() => {
     if (webgpu.isReady) {
@@ -225,6 +228,7 @@ export function WaterScene({
     } else {
       webglSim.stepSimulation();
       webglSim.updateNormals();
+      fallbackParticles.step(delta);
       waterTexture = webglSim.getWaterTexture();
     }
     
@@ -329,6 +333,7 @@ export function WaterScene({
           }
         }
 
+        fallbackParticles.emitImpact(impactX, impactZ, impactSpeed);
         onSphereImpact?.();
       }
       
@@ -480,13 +485,11 @@ export function WaterScene({
       />
       
       {/* Particles */}
-      {useGPU && (
-        <ParticleRenderer
-          positions={webgpu.particlePositions}
-          count={webgpu.activeParticles}
-          maxParticles={MAX_PARTICLES}
-        />
-      )}
+      <ParticleRenderer
+        positions={useGPU ? webgpu.particlePositions : fallbackParticles.particleData}
+        count={useGPU ? (() => webgpu.activeParticles) : fallbackParticles.getActiveParticles}
+        maxParticles={useGPU ? MAX_PARTICLES : fallbackParticles.maxParticles}
+      />
       
       {/* Skybox */}
       <mesh>
