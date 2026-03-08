@@ -102,6 +102,11 @@ export class WaterGPU {
   private applyFeedbackPipeline: any;
   private legacyFeedbackPipeline: any;
   private resetParticlesPipeline: any;
+  // Parallel compaction pipelines
+  private markAlivePipeline: any;
+  private prefixSumPipeline: any;
+  private scatterCompactPipeline: any;
+  private copyBackPipeline: any;
   
   private waterRWLayout: any;
   private waterRWUniformLayout: any;
