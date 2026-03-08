@@ -7,6 +7,8 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Droplets, RotateCcw, Layers, Cpu, Zap, Lock, Camera, Play, Pause, ArrowDown } from 'lucide-react';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
+import { AnalystPanel } from '@/components/analyst/AnalystPanel';
+import { captureAndSaveScreenshot, type ScreenshotRecord } from '@/lib/screenshots';
 
 type SimPhase = 'ready' | 'dropping' | 'splashing' | 'frozen' | 'free';
 
@@ -203,20 +205,26 @@ const FieldLegend = forwardRef<HTMLDivElement, { visible: boolean }>(({ visible 
 });
 
 // Component to capture canvas screenshots
-function CanvasCapture({ onCapture }: { onCapture: (dataUrl: string) => void }) {
+function CanvasCapture({ onCapture }: { onCapture: (canvas: HTMLCanvasElement) => void }) {
   const { gl } = useThree();
   
   useEffect(() => {
-    // Expose capture function
+    (window as any).__captureCanvasEl = () => gl.domElement;
     (window as any).__captureCanvas = () => {
       gl.domElement.toBlob((blob) => {
         if (blob) {
           const url = URL.createObjectURL(blob);
-          onCapture(url);
+          // Legacy support for the old overlay thumbnail
+          const event = new CustomEvent('canvas-blob-captured', { detail: url });
+          window.dispatchEvent(event);
         }
       });
+      onCapture(gl.domElement);
     };
-    return () => { delete (window as any).__captureCanvas; };
+    return () => { 
+      delete (window as any).__captureCanvas; 
+      delete (window as any).__captureCanvasEl;
+    };
   }, [gl, onCapture]);
   
   return null;
@@ -232,14 +240,37 @@ const Index = () => {
   const [phase, setPhase] = useState<SimPhase>('ready');
   const [paused, setPaused] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [latestAnalystCapture, setLatestAnalystCapture] = useState<ScreenshotRecord | null>(null);
   const controlsRef = useRef<OrbitControlsImpl>(null);
   const impactTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const orbitEnabled = !cameraLocked && !sphereDragging && phase !== 'frozen';
-
-  // Sphere starts above water in 'ready' mode
   const sphereStartY = phase === 'ready' ? 1.5 : undefined;
   const sphereHeld = phase === 'ready';
+
+  // Listen for legacy blob captures (overlay thumbnail)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const url = (e as CustomEvent).detail;
+      setCapturedImage(url);
+    };
+    window.addEventListener('canvas-blob-captured', handler);
+    return () => window.removeEventListener('canvas-blob-captured', handler);
+  }, []);
+
+  const doCapture = useCallback(async (triggerType: string) => {
+    const canvasFn = (window as any).__captureCanvasEl;
+    if (!canvasFn) return;
+    const canvas = canvasFn() as HTMLCanvasElement;
+    const record = await captureAndSaveScreenshot(canvas, triggerType, phase, {
+      isWebGPU,
+      showHeatmap,
+      resetKey,
+    });
+    if (record) {
+      setLatestAnalystCapture(record);
+    }
+  }, [phase, isWebGPU, showHeatmap, resetKey]);
 
   const handleDrop = useCallback(() => {
     setPhase('dropping');
@@ -249,18 +280,19 @@ const Index = () => {
     if (phase !== 'dropping') return;
     setPhase('splashing');
     
-    // Auto-freeze shortly after impact to capture crown onset
     impactTimerRef.current = setTimeout(() => {
       setPaused(true);
       setPhase('frozen');
-      // Auto-capture screenshot
+      // Auto-capture for both overlay thumbnail and analyst
       setTimeout(() => {
         if ((window as any).__captureCanvas) {
           (window as any).__captureCanvas();
         }
+        // Save to analyst system
+        doCapture('impact-freeze');
       }, 40);
     }, 120);
-  }, [phase]);
+  }, [phase, doCapture]);
 
   const handleResume = useCallback(() => {
     setPaused(false);
@@ -281,10 +313,11 @@ const Index = () => {
     if ((window as any).__captureCanvas) {
       (window as any).__captureCanvas();
     }
-  }, []);
+    doCapture('manual');
+  }, [doCapture]);
 
-  const handleCaptured = useCallback((dataUrl: string) => {
-    setCapturedImage(dataUrl);
+  const handleCanvasReady = useCallback((_canvas: HTMLCanvasElement) => {
+    // Canvas reference available for captures
   }, []);
 
   const handleTogglePause = useCallback(() => {
@@ -296,6 +329,10 @@ const Index = () => {
     }
   }, [paused, phase]);
 
+  const handleAnalystCapture = useCallback(() => {
+    doCapture('analyst-manual');
+  }, [doCapture]);
+
   return (
     <div className="relative w-full h-full bg-background overflow-hidden">
       <Canvas
@@ -304,7 +341,7 @@ const Index = () => {
           antialias: true,
           alpha: false,
           powerPreference: 'high-performance',
-          preserveDrawingBuffer: true, // Needed for screenshot capture
+          preserveDrawingBuffer: true,
         }}
         className="w-full h-full"
       >
@@ -343,7 +380,7 @@ const Index = () => {
             sphereHeld={sphereHeld}
             onSphereImpact={handleImpact}
           />
-          <CanvasCapture onCapture={handleCaptured} />
+          <CanvasCapture onCapture={handleCanvasReady} />
         </Suspense>
       </Canvas>
 
@@ -375,6 +412,14 @@ const Index = () => {
             onTogglePause={handleTogglePause}
           />
         </>
+      )}
+      
+      {/* AI Analyst Panel */}
+      {!isLoading && (
+        <AnalystPanel 
+          onRequestCapture={handleAnalystCapture}
+          latestCapture={latestAnalystCapture}
+        />
       )}
       
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-background/40 to-transparent" />
