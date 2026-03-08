@@ -1,4 +1,4 @@
-import { useState, useRef, Suspense, useCallback, useEffect } from 'react';
+import { useState, useRef, Suspense, useCallback, useEffect, forwardRef } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei';
 import { WaterScene } from '@/components/water';
