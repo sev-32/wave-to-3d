@@ -367,8 +367,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let height = waterInfo.x;
   let velocity = waterInfo.y;
   
-  // Only emit when there's upward energy
-  if (velocity < 0.001) { return; }
+  // Emit when there's any significant upward energy
+  if (velocity < 0.0005) { return; }
   
   // Pseudo-random using position for stochastic emission
   let noise = fract(sin(f32(x) * 12.9898 + f32(z) * 78.233 + f32(atomicLoad(&counter[0])) * 0.1) * 43758.5453);
