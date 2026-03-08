@@ -1,4 +1,4 @@
-import { useRef, useMemo, useCallback, useEffect, useState } from 'react';
+import { useRef, useMemo, useCallback, useEffect } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useWebGPUWater } from './useWebGPUWater';
@@ -304,9 +304,31 @@ export function WaterScene({
       
       const newCenter = center.clone().add(v.clone().multiplyScalar(delta));
       
-      // Detect impact: sphere crosses water surface
+      // Detect impact: sphere crosses water surface — fire strong radial drops
       if (!hasImpacted.current && prevY > sphereRadius && newCenter.y <= sphereRadius) {
         hasImpacted.current = true;
+        const impactSpeed = Math.abs(v.y);
+        const impactX = newCenter.x;
+        const impactZ = newCenter.z;
+        
+        // Fire a strong radial drop at impact point proportional to impact velocity
+        // This creates the correct radial wave pattern (not sine)
+        const addDropFn = useGPU ? webgpu.addDrop : webglSim.addDrop;
+        const strength = Math.min(impactSpeed * 0.015, 0.08); // Scale with impact velocity
+        addDropFn(impactX, impactZ, sphereRadius * 1.2, -strength); // Negative = downward push
+        
+        // Ring of secondary drops around impact point for crown formation
+        const ringCount = 8;
+        for (let i = 0; i < ringCount; i++) {
+          const angle = (i / ringCount) * Math.PI * 2;
+          const rx = impactX + Math.cos(angle) * sphereRadius * 1.5;
+          const rz = impactZ + Math.sin(angle) * sphereRadius * 1.5;
+          if (Math.abs(rx) < 1 && Math.abs(rz) < 1) {
+            addDropFn(rx, rz, sphereRadius * 0.4, strength * 0.6); // Upward ring
+          }
+        }
+        
+        console.log(`💥 Impact! speed=${impactSpeed.toFixed(2)}, strength=${strength.toFixed(4)}`);
         onSphereImpact?.();
       }
       

@@ -146,7 +146,7 @@ fn volumeInSphere(center: vec3f, uv: vec2f, radius: f32) -> f32 {
   let dist = length(worldPos.xz - center.xz);
   let horizontalDist = dist / radius;
   
-  if (horizontalDist > 1.3) { return 0.0; }
+  if (horizontalDist > 1.5) { return 0.0; }
   
   let cap = max(0.0, 1.0 - horizontalDist * horizontalDist);
   let sphereTop = center.y + radius * sqrt(cap);
@@ -158,8 +158,9 @@ fn volumeInSphere(center: vec3f, uv: vec2f, radius: f32) -> f32 {
   
   if (submergedTop <= submergedBot) { return 0.0; }
   
-  let displacement = (submergedTop - submergedBot) * cap * 0.04;
-  return min(displacement, 0.02);
+  // Stronger displacement — scaled with submersion depth
+  let displacement = (submergedTop - submergedBot) * cap * 0.15;
+  return min(displacement, 0.08);
 }
 
 @compute @workgroup_size(16, 16)
@@ -192,16 +193,17 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       let pointDir = normalize(toPoint + vec2f(0.0001));
       let alignment = dot(velDir2D, pointDir);
       
-      let bowWave = alignment * speed * 0.6;
-      let falloff = exp(-normDist * 1.8);
+      let bowWave = alignment * speed * 1.2;
+      let falloff = exp(-normDist * 1.5);
       
       let crossAlignment = abs(cross(vec3f(velDir2D, 0.0), vec3f(pointDir, 0.0)).z);
       let wakeAngle = 0.33;
       let isInWake = smoothstep(wakeAngle - 0.1, wakeAngle + 0.1, crossAlignment);
-      let wakeFactor = isInWake * (1.0 - alignment) * 0.15;
+      let wakeFactor = isInWake * (1.0 - alignment) * 0.3;
       
-      let waveAdd = (bowWave * falloff + wakeFactor * speed * falloff) * 0.08;
-      info.y += clamp(waveAdd, -0.03, 0.03);
+      // Much higher clamps for impact scenarios
+      let waveAdd = (bowWave * falloff + wakeFactor * speed * falloff) * 0.15;
+      info.y += clamp(waveAdd, -0.1, 0.1);
     }
   }
   
@@ -291,18 +293,19 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let R_OFF: f32 = 0.10;
   let COOLDOWN_DURATION: f32 = 0.15;
   
-  let wK = 0.25;
-  let wE = 0.35;
-  let wS = 0.2;
-  let wU = 0.2;
+  let wK = 0.20;
+  let wE = 0.40;
+  let wS = 0.20;
+  let wU = 0.20;
   
-  let Rraw = wK * min(crestness * 0.5, 1.0) 
-           + wE * min(Eup * 15.0, 1.0) 
-           + wS * min(slope * 2.5, 1.0) 
-           + wU * min(Umag * 5.0, 1.0);
+  // Scale inputs more aggressively to capture impact events
+  let Rraw = wK * min(crestness * 0.3, 1.0) 
+           + wE * min(Eup * 8.0, 1.0) 
+           + wS * min(slope * 1.5, 1.0) 
+           + wU * min(Umag * 3.0, 1.0);
   
-  let chargeRate = 4.0;
-  let R_decay = 2.5;
+  let chargeRate = 8.0;
+  let R_decay = 2.0;
   var R = prevField.x;
   
   // Suppress R charging during cooldown
@@ -389,22 +392,24 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let cooldown = f2.w;
   
   // R hysteresis gating — only emit from active rupture zones
-  let R_ON: f32 = 0.20;
-  let R_OFF: f32 = 0.10;
-  if (R < R_OFF || M < 0.03 || cooldown > 0.001) { return; }
+  let R_ON: f32 = 0.15;
+  let R_OFF: f32 = 0.08;
+  if (R < R_OFF || M < 0.02) { return; }
+  // Skip cooldown check for initial impacts (cooldown is short)
   
   let waterInfo = water[i];
   let height = waterInfo.x;
   let velocity = waterInfo.y;
   
-  // Need some upward energy
-  if (velocity < 0.0003) { return; }
+  // Need some upward energy or strong rupture
+  if (velocity < 0.0001 && R < 0.3) { return; }
   
   // Pseudo-random
   let noise = fract(sin(f32(x) * 12.9898 + f32(z) * 78.233 + f32(atomicLoad(&counter[0])) * 0.1) * 43758.5453);
   
-  // Probability scaled by R intensity and M availability
-  if (noise > R * M * 1.5) { return; }
+  // Probability: higher R and M = more likely to emit
+  let emitProb = R * M * 2.0 + R * R;
+  if (noise > emitProb) { return; }
   
   let worldX = f32(x) / f32(N - 1u) * 2.0 - 1.0;
   let worldZ = f32(z) / f32(N - 1u) * 2.0 - 1.0;
