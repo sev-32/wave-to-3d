@@ -14,7 +14,45 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      screenshots: {
+        Row: {
+          ai_analysis: string | null
+          ai_recommendations: Json | null
+          created_at: string
+          filename: string
+          id: string
+          metadata: Json | null
+          phase: string | null
+          public_url: string | null
+          storage_path: string
+          trigger_type: string
+        }
+        Insert: {
+          ai_analysis?: string | null
+          ai_recommendations?: Json | null
+          created_at?: string
+          filename: string
+          id?: string
+          metadata?: Json | null
+          phase?: string | null
+          public_url?: string | null
+          storage_path: string
+          trigger_type?: string
+        }
+        Update: {
+          ai_analysis?: string | null
+          ai_recommendations?: Json | null
+          created_at?: string
+          filename?: string
+          id?: string
+          metadata?: Json | null
+          phase?: string | null
+          public_url?: string | null
+          storage_path?: string
+          trigger_type?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
