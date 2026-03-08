@@ -392,22 +392,24 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let cooldown = f2.w;
   
   // R hysteresis gating — only emit from active rupture zones
-  let R_ON: f32 = 0.20;
-  let R_OFF: f32 = 0.10;
-  if (R < R_OFF || M < 0.03 || cooldown > 0.001) { return; }
+  let R_ON: f32 = 0.15;
+  let R_OFF: f32 = 0.08;
+  if (R < R_OFF || M < 0.02) { return; }
+  // Skip cooldown check for initial impacts (cooldown is short)
   
   let waterInfo = water[i];
   let height = waterInfo.x;
   let velocity = waterInfo.y;
   
-  // Need some upward energy
-  if (velocity < 0.0003) { return; }
+  // Need some upward energy or strong rupture
+  if (velocity < 0.0001 && R < 0.3) { return; }
   
   // Pseudo-random
   let noise = fract(sin(f32(x) * 12.9898 + f32(z) * 78.233 + f32(atomicLoad(&counter[0])) * 0.1) * 43758.5453);
   
-  // Probability scaled by R intensity and M availability
-  if (noise > R * M * 1.5) { return; }
+  // Probability: higher R and M = more likely to emit
+  let emitProb = R * M * 2.0 + R * R;
+  if (noise > emitProb) { return; }
   
   let worldX = f32(x) / f32(N - 1u) * 2.0 - 1.0;
   let worldZ = f32(z) / f32(N - 1u) * 2.0 - 1.0;
