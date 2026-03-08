@@ -196,7 +196,8 @@ export function ParticleRenderer({ positions, count, maxParticles, light }: Part
   }, [light]);
   
   useFrame((state) => {
-    const actualCount = Math.min(count, maxRender);
+    const liveCount = typeof count === 'function' ? count() : count;
+    const actualCount = Math.min(liveCount, maxRender);
     
     // Update camera-dependent uniforms
     const cam = camera as THREE.PerspectiveCamera;
