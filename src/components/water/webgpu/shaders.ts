@@ -236,17 +236,16 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let i = z * N + x;
   let info = water[i];
   let prevField = fieldIn[i];
+  let prevField2 = field2[i]; // Previous momentum data
   
   let height = info.x;
   let velocity = info.y;
   
-  // Safe neighbor access
   let lx = select(x - 1u, 0u, x == 0u);
   let rx = min(x + 1u, N - 1u);
   let uz = select(z - 1u, 0u, z == 0u);
   let dz = min(z + 1u, N - 1u);
   
-  // Height gradient
   let hL = water[z * N + lx].x;
   let hR = water[z * N + rx].x;
   let hU = water[uz * N + x].x;
@@ -256,25 +255,22 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let gradZ = (hD - hU) * 0.5 * f32(N);
   let slope = sqrt(gradX * gradX + gradZ * gradZ);
   
-  // Laplacian (curvature proxy)
   let laplacian = (hL + hR + hU + hD - 4.0 * height) * f32(N) * f32(N);
   let crestness = abs(laplacian);
-  
-  // Upward excitation
   let Eup = max(0.0, velocity);
   
-  // ---- Surface Momentum U ----
+  // ---- Surface Momentum U (read from field2 previous values) ----
   let momentumGainX = -gradX * velocity * params.dt * 5.0;
   let momentumGainZ = -gradZ * velocity * params.dt * 5.0;
-  var Ux = prevField.x * 0.95 + momentumGainX;
-  var Uz = prevField.y * 0.95 + momentumGainZ;
+  var Ux = prevField2.x * 0.95 + momentumGainX;
+  var Uz = prevField2.y * 0.95 + momentumGainZ;
   let Umag = sqrt(Ux * Ux + Uz * Uz);
   
-  // Momentum divergence
-  let UxL = fieldIn[z * N + lx].x;
-  let UxR = fieldIn[z * N + rx].x;
-  let UzU = fieldIn[uz * N + x].y;
-  let UzD = fieldIn[dz * N + x].y;
+  // Momentum divergence from field2 neighbors
+  let UxL = field2[z * N + lx].x;
+  let UxR = field2[z * N + rx].x;
+  let UzU = field2[uz * N + x].y;
+  let UzD = field2[dz * N + x].y;
   let divU = (UxR - UxL + UzD - UzU) * 0.5 * f32(N);
   
   // ---- Rupture Potential R ----
