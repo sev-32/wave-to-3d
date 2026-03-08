@@ -24,12 +24,19 @@ interface WaterSceneProps {
   showHeatmap?: boolean;
   onWebGPUStatus?: (status: boolean) => void;
   onSphereDragChange?: (dragging: boolean) => void;
+  paused?: boolean;
+  sphereStartY?: number;
+  sphereHeld?: boolean;
+  onSphereImpact?: () => void;
 }
 
 const MODE_ADD_DROPS = 0;
 const MODE_MOVE_SPHERE = 1;
 
-export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus, onSphereDragChange }: WaterSceneProps) {
+export function WaterScene({ 
+  onReady, showHeatmap = false, onWebGPUStatus, onSphereDragChange,
+  paused = false, sphereStartY, sphereHeld = false, onSphereImpact,
+}: WaterSceneProps) {
   const { camera, gl, raycaster, pointer } = useThree();
   
   const webgpu = useWebGPUWater();
@@ -38,13 +45,15 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus, onSph
   
   const useGPU = webgpu.isWebGPU && webgpu.isReady;
   
-  const sphereCenterRef = useRef(new THREE.Vector3(0, -0.5, 0));
-  const oldSphereCenter = useRef(new THREE.Vector3(0, -0.5, 0));
+  const initialY = sphereStartY ?? -0.5;
+  const sphereCenterRef = useRef(new THREE.Vector3(0, initialY, 0));
+  const oldSphereCenter = useRef(new THREE.Vector3(0, initialY, 0));
   const sphereRadius = 0.25;
   const velocityRef = useRef(new THREE.Vector3());
   const lightDir = useMemo(() => new THREE.Vector3(2, 2, -1).normalize(), []);
   const isInitialized = useRef(false);
   const timeRef = useRef(0);
+  const hasImpacted = useRef(false);
   
   const modeRef = useRef(-1);
   const prevHitRef = useRef<THREE.Vector3 | null>(null);
@@ -53,6 +62,16 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus, onSph
   
   const tileTexture = useMemo(() => createTileTexture(), []);
   const skyboxTexture = useMemo(() => createSkyboxTexture(), []);
+  
+  // Reset sphere position when sphereStartY changes
+  useEffect(() => {
+    if (sphereStartY !== undefined) {
+      sphereCenterRef.current.set(0, sphereStartY, 0);
+      oldSphereCenter.current.set(0, sphereStartY, 0);
+      velocityRef.current.set(0, 0, 0);
+      hasImpacted.current = false;
+    }
+  }, [sphereStartY]);
   
   useEffect(() => {
     if (webgpu.isReady) {
@@ -180,6 +199,20 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus, onSph
   // Main render loop
   useFrame((state, delta) => {
     if (delta > 1) return;
+    
+    // Skip simulation updates when paused
+    if (paused) {
+      // Still update sphere visual position and material uniforms
+      const cameraPos = camera.position.clone();
+      [waterMaterialAbove, waterMaterialBelow].forEach(mat => {
+        mat.uniforms.eye.value.copy(cameraPos);
+        mat.uniforms.sphereCenter.value.copy(sphereCenterRef.current);
+      });
+      poolMaterial.uniforms.sphereCenter.value.copy(sphereCenterRef.current);
+      sphereMaterial.uniforms.sphereCenter.value.copy(sphereCenterRef.current);
+      return;
+    }
+    
     timeRef.current += delta;
     
     let waterTexture: THREE.Texture;
@@ -228,25 +261,30 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus, onSph
       heatmapMaterial.uniforms.time.value = timeRef.current;
     }
     
-    // Sphere physics — realistic buoyancy, drag, and wave interaction
+    // Sphere physics
+    if (sphereHeld) {
+      // Sphere is held in place above water
+      return;
+    }
+    
     if (modeRef.current !== MODE_MOVE_SPHERE) {
       const v = velocityRef.current;
       const center = sphereCenterRef.current;
       const waterSurfaceY = 0;
       
+      const prevY = center.y;
+      
       // Gravity
       const gravity = -9.8;
       v.y += gravity * delta;
       
-      // Buoyancy (Archimedes): upward force proportional to submerged volume
+      // Buoyancy
       const submergedDepth = Math.max(0, waterSurfaceY + sphereRadius - center.y);
       const submergedFraction = Math.min(submergedDepth / (2 * sphereRadius), 1);
       if (submergedFraction > 0) {
-        // Buoyant force = ρ_water * g * V_submerged (simplified)
-        const buoyancyForce = 14.0 * submergedFraction; // Slightly > gravity for floating
+        const buoyancyForce = 14.0 * submergedFraction;
         v.y += buoyancyForce * delta;
         
-        // Water drag (quadratic drag proportional to speed)
         const speed = v.length();
         if (speed > 0.001) {
           const dragCoeff = 2.5 * submergedFraction;
@@ -254,19 +292,23 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus, onSph
           v.multiplyScalar(1 - dragDecel);
         }
         
-        // Surface tension damping at water line
         const distToSurface = Math.abs(center.y - waterSurfaceY);
         if (distToSurface < sphereRadius * 0.3) {
-          v.y *= 0.96; // Extra damping near equilibrium
+          v.y *= 0.96;
         }
       }
       
-      // Air drag (much lighter)
       if (submergedFraction === 0) {
         v.multiplyScalar(0.999);
       }
       
       const newCenter = center.clone().add(v.clone().multiplyScalar(delta));
+      
+      // Detect impact: sphere crosses water surface
+      if (!hasImpacted.current && prevY > sphereRadius && newCenter.y <= sphereRadius) {
+        hasImpacted.current = true;
+        onSphereImpact?.();
+      }
       
       // Floor collision
       const minY = -1 + sphereRadius;
@@ -301,6 +343,7 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus, onSph
   
   // Interaction handlers
   const handlePointerDown = useCallback((event: any) => {
+    if (paused || sphereHeld) return;
     event.stopPropagation();
     isDraggingRef.current = true;
     
@@ -327,10 +370,10 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus, onSph
       const addDropFn = useGPU ? webgpu.addDrop : webglSim.addDrop;
       addDropFn(x, z, 0.03, 0.02);
     }
-  }, [camera, pointer, raycaster, useGPU, webgpu, webglSim, onSphereDragChange]);
+  }, [camera, pointer, raycaster, useGPU, webgpu, webglSim, onSphereDragChange, paused, sphereHeld]);
   
   const handlePointerMove = useCallback((event: any) => {
-    if (!isDraggingRef.current) return;
+    if (!isDraggingRef.current || paused) return;
     
     switch (modeRef.current) {
       case MODE_ADD_DROPS: {
@@ -373,7 +416,7 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus, onSph
         break;
       }
     }
-  }, [camera, pointer, raycaster, useGPU, webgpu, webglSim]);
+  }, [camera, pointer, raycaster, useGPU, webgpu, webglSim, paused]);
   
   const handlePointerUp = useCallback(() => {
     if (modeRef.current === MODE_MOVE_SPHERE) {
@@ -414,7 +457,7 @@ export function WaterScene({ onReady, showHeatmap = false, onWebGPUStatus, onSph
         onPointerMove={handlePointerMove}
       />
       
-      {/* Particles from surface fields */}
+      {/* Particles */}
       {useGPU && (
         <ParticleRenderer
           positions={webgpu.particlePositions}
