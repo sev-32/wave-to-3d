@@ -138,28 +138,23 @@ fn sphereSDF(p: vec3f, center: vec3f, radius: f32) -> f32 {
 fn volumeInSphere(center: vec3f, uv: vec2f, radius: f32) -> f32 {
   let worldPos = vec3f(uv.x * 2.0 - 1.0, 0.0, uv.y * 2.0 - 1.0);
   let dist = length(worldPos.xz - center.xz);
-  
-  // Use proper SDF-based volume displacement
   let horizontalDist = dist / radius;
   
-  if (horizontalDist > 1.5) { return 0.0; }
+  if (horizontalDist > 1.3) { return 0.0; }
   
-  // Smooth sphere cap volume
   let cap = max(0.0, 1.0 - horizontalDist * horizontalDist);
   let sphereTop = center.y + radius * sqrt(cap);
   let sphereBot = center.y - radius * sqrt(cap);
   
-  // Water surface displacement based on submerged volume
   let waterY = 0.0;
   let submergedTop = min(sphereTop, waterY);
-  let submergedBot = max(sphereBot, -1.0); // pool floor
+  let submergedBot = max(sphereBot, -1.0);
   
   if (submergedTop <= submergedBot) { return 0.0; }
   
-  // Displacement proportional to submerged cross-section
-  let displacement = (submergedTop - submergedBot) * cap * 0.15;
-  
-  return displacement;
+  // Gentle displacement - clamped to prevent runaway
+  let displacement = (submergedTop - submergedBot) * cap * 0.04;
+  return min(displacement, 0.02);
 }
 
 @compute @workgroup_size(16, 16)
