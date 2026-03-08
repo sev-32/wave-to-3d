@@ -43,15 +43,14 @@ const fluidVertexShader = `
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
     vDepth = -mvPosition.z;
     
-    // Size attenuation: larger when closer, smaller when further
+    // Size attenuation
     float ageFactor = max(0.05, 1.0 - aAge * 0.25);
     float sizeBase = uPointSize * ageFactor;
     
-    // Particles that are moving fast are slightly elongated (approximated by larger size)
     float speed = length(aVelocity);
-    float speedBoost = 1.0 + min(speed * 0.3, 0.5);
+    float speedBoost = 1.0 + min(speed * 0.15, 0.3);
     
-    gl_PointSize = sizeBase * speedBoost * (300.0 / -mvPosition.z);
+    gl_PointSize = sizeBase * speedBoost * (30.0 / -mvPosition.z);
     gl_Position = projectionMatrix * mvPosition;
     
     // Hide inactive particles
@@ -83,60 +82,27 @@ const fluidFragmentShader = `
     vec2 coord = gl_PointCoord * 2.0 - 1.0;
     float r2 = dot(coord, coord);
     
-    // Discard outside the circle
+    // Soft gaussian blob - key to fluid look
     if (r2 > 1.0) discard;
     
-    // Smooth falloff for blending particles together
-    float alpha = exp(-r2 * 2.5);
+    // Gaussian kernel for smooth density splatting (like SPH/MLS-MPM rendering)
+    float weight = exp(-r2 * 4.0);
     
-    // Reconstruct pseudo-normal from point coord (sphere-like)
-    float z = sqrt(max(0.0, 1.0 - r2));
-    vec3 normal = normalize(vec3(coord, z));
-    
-    // Water-like coloring
     float speed = length(vVelocity);
     float ageFactor = clamp(vAge * 0.3, 0.0, 1.0);
     
-    // Base water color - matches the pool water
-    vec3 deepWater = vec3(0.15, 0.45, 0.65);
-    vec3 shallowWater = vec3(0.4, 0.75, 0.9);
-    vec3 foamColor = vec3(0.85, 0.92, 0.95);
+    // Translucent water tint - NOT opaque spheres
+    vec3 waterTint = vec3(0.2, 0.5, 0.75);
+    vec3 foamTint = vec3(0.6, 0.8, 0.95);
     
-    // Fresh particles are bright/foamy, aging ones become deep water
-    vec3 baseColor = mix(foamColor, deepWater, ageFactor);
+    float foamFactor = smoothstep(0.3, 2.0, speed);
+    vec3 color = mix(waterTint, foamTint, foamFactor * 0.5 + ageFactor * 0.2);
     
-    // Speed adds white foam
-    float foamFactor = smoothstep(0.5, 3.0, speed);
-    baseColor = mix(baseColor, foamColor, foamFactor * 0.6);
+    // Very low alpha - particles overlap and accumulate to form fluid density
+    float baseAlpha = mix(0.12, 0.04, ageFactor);
+    float finalAlpha = weight * baseAlpha;
     
-    // Fresnel-like edge brightening
-    float fresnel = pow(1.0 - z, 3.0);
-    
-    // Diffuse lighting
-    float diffuse = max(0.0, dot(normal, uLightDir)) * 0.6;
-    
-    // Specular highlight
-    vec3 viewDir = vec3(0.0, 0.0, 1.0);
-    vec3 halfDir = normalize(uLightDir + viewDir);
-    float specular = pow(max(0.0, dot(normal, halfDir)), 80.0) * 0.8;
-    
-    // Subsurface scattering approximation
-    float sss = max(0.0, dot(-normal, uLightDir)) * 0.15;
-    
-    vec3 color = baseColor * (0.3 + diffuse + sss) + vec3(specular);
-    
-    // Edge glow (Fresnel)
-    color += vec3(0.3, 0.5, 0.7) * fresnel * 0.4;
-    
-    // Transparency: thick in center, transparent at edges
-    float thickness = z * (1.0 - ageFactor * 0.5);
-    float finalAlpha = alpha * mix(0.85, 0.3, ageFactor) * thickness;
-    
-    // Depth-based fog for particles far from camera
-    float fogFactor = 1.0 - exp(-vDepth * 0.1);
-    color = mix(color, vec3(0.3, 0.6, 0.8), fogFactor * 0.3);
-    
-    gl_FragColor = vec4(color, finalAlpha);
+    gl_FragColor = vec4(color * finalAlpha, finalAlpha);
   }
 `;
 
@@ -176,7 +142,7 @@ export function ParticleRenderer({ positions, count, maxParticles, light }: Part
   const material = useMemo(() => {
     return new THREE.ShaderMaterial({
       uniforms: {
-        uPointSize: { value: 3.0 },
+        uPointSize: { value: 4.0 },
         uTime: { value: 0 },
         uLightDir: { value: light || new THREE.Vector3(0.5, 0.7, -0.3).normalize() },
       },
@@ -185,7 +151,10 @@ export function ParticleRenderer({ positions, count, maxParticles, light }: Part
       transparent: true,
       depthWrite: false,
       depthTest: true,
-      blending: THREE.NormalBlending,
+      blending: THREE.CustomBlending,
+      blendEquation: THREE.AddEquation,
+      blendSrc: THREE.OneFactor,
+      blendDst: THREE.OneMinusSrcAlphaFactor,
     });
   }, [light]);
   
