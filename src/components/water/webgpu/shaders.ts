@@ -293,15 +293,16 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let R_OFF: f32 = 0.10;
   let COOLDOWN_DURATION: f32 = 0.15;
   
-  let wK = 0.25;
-  let wE = 0.35;
-  let wS = 0.2;
-  let wU = 0.2;
+  let wK = 0.20;
+  let wE = 0.40;
+  let wS = 0.20;
+  let wU = 0.20;
   
-  let Rraw = wK * min(crestness * 0.5, 1.0) 
-           + wE * min(Eup * 15.0, 1.0) 
-           + wS * min(slope * 2.5, 1.0) 
-           + wU * min(Umag * 5.0, 1.0);
+  // Scale inputs more aggressively to capture impact events
+  let Rraw = wK * min(crestness * 0.3, 1.0) 
+           + wE * min(Eup * 8.0, 1.0) 
+           + wS * min(slope * 1.5, 1.0) 
+           + wU * min(Umag * 3.0, 1.0);
   
   let chargeRate = 4.0;
   let R_decay = 2.5;
