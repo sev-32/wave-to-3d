@@ -168,10 +168,10 @@ const Controls = forwardRef<HTMLDivElement, {
   );
 });
 
-function FieldLegend({ visible }: { visible: boolean }) {
+const FieldLegend = forwardRef<HTMLDivElement, { visible: boolean }>(({ visible }, ref) => {
   if (!visible) return null;
   return (
-    <div className="absolute top-4 right-4 p-3 rounded-lg bg-card/80 backdrop-blur-sm border border-border">
+    <div ref={ref} className="absolute top-4 right-4 p-3 rounded-lg bg-card/80 backdrop-blur-sm border border-border">
       <h4 className="text-xs font-semibold text-foreground mb-2 flex items-center gap-1.5">
         <Cpu className="w-3 h-3" />
         Surface Intent Fields
@@ -200,7 +200,7 @@ function FieldLegend({ visible }: { visible: boolean }) {
       </div>
     </div>
   );
-}
+});
 
 // Component to capture canvas screenshots
 function CanvasCapture({ onCapture }: { onCapture: (dataUrl: string) => void }) {
