@@ -541,7 +541,7 @@ export const heatmapFragmentShader = `
     vec3 flowColor = hsv2rgb(vec3(hue, 0.6, 1.0)) * flowLine;
     
     // === Emission Zone Highlight ===
-    float emitZone = step(0.06, R) * step(0.015, M) * 0.5;
+    float emitZone = step(0.10, R) * step(0.03, M) * 0.55;
     vec3 emitColor = vec3(1.0, 1.0, 0.8) * emitZone * (sin(time * 8.0) * 0.3 + 0.7);
     
     // Combine all layers

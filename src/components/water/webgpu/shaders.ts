@@ -393,8 +393,8 @@ const MAX_P: u32 = ${MAX_PARTICLES}u;
 fn main(@builtin(global_invocation_id) gid: vec3u) {
   let x = gid.x;
   let z = gid.y;
-  // Check every 2nd texel for denser emission
-  if (x >= N || z >= N || (x % 2u != 0u) || (z % 2u != 0u)) { return; }
+  // Evaluate all texels for smooth, continuous spray bands
+  if (x >= N || z >= N) { return; }
   
   let i = z * N + x;
   let field = fields[i];
@@ -409,9 +409,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let cooldown = f2.w;
   
   // R hysteresis gating — only emit from active rupture zones
-  let R_ON: f32 = 0.12;
-  let R_OFF: f32 = 0.06;
-  if (R < R_OFF || M < 0.015) { return; }
+  let R_ON: f32 = 0.20;
+  let R_OFF: f32 = 0.10;
+  if (R < R_OFF || M < 0.03) { return; }
   
   let waterInfo = water[i];
   let height = waterInfo.x;
@@ -419,13 +419,13 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let kinetic = abs(velocity);
   
   // Allow impact and rebound states to emit (not just upward velocity)
-  if (kinetic < 0.00004 && R < R_ON) { return; }
+  if (kinetic < 0.00002 && R < R_ON) { return; }
   
   // Pseudo-random
   let noise = fract(sin(f32(x) * 12.9898 + f32(z) * 78.233 + f32(atomicLoad(&counter[0])) * 0.1) * 43758.5453);
   
   // Probability weighted by rupture, kinetic energy, and available reservoir
-  let emitProb = clamp((R * 0.9 + kinetic * 25.0) * (0.25 + M * 0.9), 0.0, 0.85);
+  let emitProb = clamp((R * R * 1.4 + kinetic * 18.0) * (0.35 + M), 0.0, 0.92);
   if (noise > emitProb) { return; }
   
   let worldX = f32(x) / f32(N - 1u) * 2.0 - 1.0;
