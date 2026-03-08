@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { useWebGPUWater } from './useWebGPUWater';
 import { useWaterSimulation } from './useWaterSimulation';
 import { useCaustics } from './useCaustics';
+import { useFallbackParticles } from './useFallbackParticles';
 import { createTileTexture, createSkyboxTexture } from './textures';
 import { ParticleRenderer } from './ParticleRenderer';
 import { MAX_PARTICLES } from './webgpu';
