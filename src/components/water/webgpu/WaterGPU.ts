@@ -33,6 +33,8 @@ import {
 const WATER_BUFFER_SIZE = GRID_SIZE * GRID_SIZE * 4 * 4;
 const FIELD_BUFFER_SIZE = GRID_SIZE * GRID_SIZE * 4 * 4;
 const PARTICLE_BUFFER_SIZE = MAX_PARTICLES * 2 * 4 * 4;
+const HALF_PARTICLES = MAX_PARTICLES / 2;
+const ALIVE_FLAGS_SIZE = HALF_PARTICLES * 4; // u32 per particle
 // Feedback buffer: 2 * GRID_SIZE^2 i32 values (mass return + water impulse)
 const FEEDBACK_BUFFER_SIZE = GRID_SIZE * GRID_SIZE * 2 * 4;
 
