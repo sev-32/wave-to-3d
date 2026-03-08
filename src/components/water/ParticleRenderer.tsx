@@ -43,15 +43,14 @@ const fluidVertexShader = `
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
     vDepth = -mvPosition.z;
     
-    // Size attenuation: larger when closer, smaller when further
+    // Size attenuation
     float ageFactor = max(0.05, 1.0 - aAge * 0.25);
     float sizeBase = uPointSize * ageFactor;
     
-    // Particles that are moving fast are slightly elongated (approximated by larger size)
     float speed = length(aVelocity);
-    float speedBoost = 1.0 + min(speed * 0.3, 0.5);
+    float speedBoost = 1.0 + min(speed * 0.15, 0.3);
     
-    gl_PointSize = sizeBase * speedBoost * (300.0 / -mvPosition.z);
+    gl_PointSize = sizeBase * speedBoost * (30.0 / -mvPosition.z);
     gl_Position = projectionMatrix * mvPosition;
     
     // Hide inactive particles
