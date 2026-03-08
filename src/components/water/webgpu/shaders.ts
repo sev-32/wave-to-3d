@@ -792,13 +792,13 @@ const HALF_MAX: u32 = ${MAX_PARTICLES / 2}u;
 @group(0) @binding(0) var<storage, read_write> particles: array<vec4f>;
 @group(0) @binding(1) var<storage, read> tempParticles: array<vec4f>;
 @group(0) @binding(2) var<storage, read_write> counter: array<atomic<u32>>;
-@group(0) @binding(3) var<storage, read> totalAlive: array<atomic<u32>>;
+@group(0) @binding(3) var<storage, read> totalAlive: array<u32>;
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
   // First thread updates counter
   if (gid.x == 0u) {
-    let total = atomicLoad(&totalAlive[0]);
+    let total = totalAlive[0];
     atomicStore(&counter[0], total);
   }
   
