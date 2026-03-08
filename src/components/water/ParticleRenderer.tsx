@@ -17,7 +17,7 @@ interface ParticleRendererProps {
 
 // World-space particle radius in world units
 // Pool is 2 units wide, particle ≈ 0.4% of pool width
-const PARTICLE_WORLD_RADIUS = 0.013;
+const PARTICLE_WORLD_RADIUS = 0.008;
 
 const fluidVertexShader = `
   precision highp float;
