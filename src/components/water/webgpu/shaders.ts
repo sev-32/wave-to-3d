@@ -89,12 +89,13 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let dl = waterIn[dz * N + lx].x;
   let dr = waterIn[dz * N + rx].x;
 
-  // 8-neighbor isotropic stencil reduces axis-biased "sine" artifacts
+  // 8-neighbor isotropic stencil reduces axis-biased artifacts
   let axialAvg = (left + right + up + down) * 0.20;
   let diagAvg = (ul + ur + dl + dr) * 0.05;
   let avg = axialAvg + diagAvg;
 
-  info.y += (avg - info.x) * 2.0;
+  // Slightly softer propagation to avoid over-energetic craters
+  info.y += (avg - info.x) * 1.65;
   info.y *= params.damping;
   info.x += info.y;
   
@@ -167,9 +168,9 @@ fn volumeInSphere(center: vec3f, uv: vec2f, radius: f32) -> f32 {
   
   if (submergedTop <= submergedBot) { return 0.0; }
   
-  // Balanced displacement to avoid oversized craters
-  let displacement = (submergedTop - submergedBot) * cap * 0.065;
-  return min(displacement, 0.03);
+  // Conservative displacement to avoid unrealistic height spikes
+  let displacement = (submergedTop - submergedBot) * cap * 0.045;
+  return min(displacement, 0.016);
 }
 
 @compute @workgroup_size(16, 16)
@@ -210,9 +211,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       let isInWake = smoothstep(wakeAngle - 0.1, wakeAngle + 0.1, crossAlignment);
       let wakeFactor = isInWake * (1.0 - alignment) * 0.3;
       
-      // Keep coupling energetic but stable for realistic crowns
-      let waveAdd = (bowWave * falloff + wakeFactor * speed * falloff) * 0.06;
-      info.y += clamp(waveAdd, -0.04, 0.04);
+      // Keep coupling energetic but avoid oversized bow waves
+      let waveAdd = (bowWave * falloff + wakeFactor * speed * falloff) * 0.035;
+      info.y += clamp(waveAdd, -0.022, 0.022);
     }
   }
   
@@ -298,26 +299,32 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   var cooldown = max(0.0, prevField2.w - params.dt);
   
   // ---- Rupture Potential R with hysteresis ----
-  let R_ON: f32 = 0.16;
-  let R_OFF: f32 = 0.07;
-  let COOLDOWN_DURATION: f32 = 0.12;
-  
-  let wK = 0.24;
-  let wE = 0.36;
-  let wS = 0.20;
-  let wU = 0.20;
+  let R_ON: f32 = 0.20;
+  let R_OFF: f32 = 0.10;
+  let COOLDOWN_DURATION: f32 = 0.14;
 
-  // Use symmetric energy (abs velocity) and moderated gains for stable heatmap behavior
+  let wK = 0.20;
+  let wE = 0.24;
+  let wS = 0.16;
+  let wU = 0.20;
+  let wD = 0.12;
+  let wI = 0.08;
+
   let Ekin = abs(velocity);
+  let compression = min(max(0.0, -divU) * 0.025, 1.0);
+  let impactMemory = min(Ekin * exp(-slope * 0.12) * 6.0, 1.0);
+
   let Rraw = wK * min(crestness * 0.08, 1.0)
-           + wE * min(Ekin * 4.0, 1.0)
-           + wS * min(slope * 0.9, 1.0)
-           + wU * min(Umag * 2.0, 1.0);
-  
-  let chargeRate = 4.5;
-  let R_decay = 2.8;
+           + wE * min(Ekin * 3.6, 1.0)
+           + wS * min(slope * 0.75, 1.0)
+           + wU * min(Umag * 1.8, 1.0)
+           + wD * compression
+           + wI * impactMemory;
+
+  let chargeRate = 5.0;
+  let R_decay = 3.0;
   var R = prevField.x;
-  
+
   // Suppress R charging during cooldown
   let chargeMultiplier = select(1.0, 0.0, cooldown > 0.001);
   R += (chargeRate * clamp(Rraw, 0.0, 1.0) * chargeMultiplier - R_decay * R) * params.dt;
@@ -386,8 +393,8 @@ const MAX_P: u32 = ${MAX_PARTICLES}u;
 fn main(@builtin(global_invocation_id) gid: vec3u) {
   let x = gid.x;
   let z = gid.y;
-  // Check every 2nd texel for denser emission
-  if (x >= N || z >= N || (x % 2u != 0u) || (z % 2u != 0u)) { return; }
+  // Evaluate all texels for smooth, continuous spray bands
+  if (x >= N || z >= N) { return; }
   
   let i = z * N + x;
   let field = fields[i];
@@ -402,9 +409,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let cooldown = f2.w;
   
   // R hysteresis gating — only emit from active rupture zones
-  let R_ON: f32 = 0.12;
-  let R_OFF: f32 = 0.06;
-  if (R < R_OFF || M < 0.015) { return; }
+  let R_ON: f32 = 0.20;
+  let R_OFF: f32 = 0.10;
+  if (R < R_OFF || M < 0.03) { return; }
   
   let waterInfo = water[i];
   let height = waterInfo.x;
@@ -412,13 +419,13 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let kinetic = abs(velocity);
   
   // Allow impact and rebound states to emit (not just upward velocity)
-  if (kinetic < 0.00004 && R < R_ON) { return; }
+  if (kinetic < 0.00002 && R < R_ON) { return; }
   
   // Pseudo-random
   let noise = fract(sin(f32(x) * 12.9898 + f32(z) * 78.233 + f32(atomicLoad(&counter[0])) * 0.1) * 43758.5453);
   
   // Probability weighted by rupture, kinetic energy, and available reservoir
-  let emitProb = clamp((R * 0.9 + kinetic * 25.0) * (0.25 + M * 0.9), 0.0, 0.85);
+  let emitProb = clamp((R * R * 1.4 + kinetic * 18.0) * (0.35 + M), 0.0, 0.92);
   if (noise > emitProb) { return; }
   
   let worldX = f32(x) / f32(N - 1u) * 2.0 - 1.0;

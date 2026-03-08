@@ -149,9 +149,22 @@ export class WaterGPU {
     this.physicsParamsBuffer = device.createBuffer({ size: 16, usage: UNIFORM | COPY_DST });
 
     // Default params
-    device.queue.writeBuffer(this.updateParamsBuffer, 0, new Float32Array([0.995, 0, 0, 0]));
-    device.queue.writeBuffer(this.fieldParamsBuffer, 0, new Float32Array([0.016, 0.3, 2.0, 0.4]));
+    device.queue.writeBuffer(this.updateParamsBuffer, 0, new Float32Array([0.996, 0, 0, 0]));
+    device.queue.writeBuffer(this.fieldParamsBuffer, 0, new Float32Array([0.016, 0.35, 2.2, 0.4]));
     device.queue.writeBuffer(this.physicsParamsBuffer, 0, new Float32Array([0.016, 9.8, 0.995, 2.5]));
+
+    // Initialize field buffers with realistic baseline so impact can emit immediately
+    const initialFields = new Float32Array(GRID_SIZE * GRID_SIZE * 4);
+    for (let i = 0; i < initialFields.length; i += 4) {
+      initialFields[i] = 0.0;    // R
+      initialFields[i + 1] = 0.12; // C
+      initialFields[i + 2] = 0.6;  // M baseline
+      initialFields[i + 3] = 0.45; // A
+    }
+    const initialField2 = new Float32Array(GRID_SIZE * GRID_SIZE * 4);
+    device.queue.writeBuffer(this.fieldBuffers[0], 0, initialFields);
+    device.queue.writeBuffer(this.fieldBuffers[1], 0, initialFields);
+    device.queue.writeBuffer(this.field2Buffer, 0, initialField2);
 
     // Bind group layouts
     this.waterRWLayout = device.createBindGroupLayout({
