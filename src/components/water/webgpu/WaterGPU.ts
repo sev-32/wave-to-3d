@@ -551,29 +551,97 @@ export class WaterGPU {
       this.swapWater();
     }
 
-    // 9. Reset/compact particles (every 20 frames, serial fallback)
+    // 9. Parallel particle compaction (every 20 frames)
     if (this.frameCount % 20 === 0) {
-      const bg = this.device.createBindGroup({
-        layout: this.particleResetLayout,
-        entries: [
-          { binding: 0, resource: { buffer: this.particleBuffer } },
-          { binding: 1, resource: { buffer: this.counterBuffer } },
-        ],
-      });
-      const pass = encoder.beginComputePass();
-      pass.setPipeline(this.resetParticlesPipeline);
-      pass.setBindGroup(0, bg);
-      pass.dispatchWorkgroups(1);
-      pass.end();
+      // Zero totalAlive counter
+      this.device.queue.writeBuffer(this.totalAliveBuffer, 0, new Uint32Array([0]));
+
+      const particleWG = Math.ceil(HALF_PARTICLES / 256);
+
+      // Step 1: Mark alive
+      {
+        const bg = this.device.createBindGroup({
+          layout: this.markAliveLayout,
+          entries: [
+            { binding: 0, resource: { buffer: this.particleBuffer } },
+            { binding: 1, resource: { buffer: this.aliveFlagsBuffer } },
+            { binding: 2, resource: { buffer: this.counterBuffer } },
+          ],
+        });
+        const pass = encoder.beginComputePass();
+        pass.setPipeline(this.markAlivePipeline);
+        pass.setBindGroup(0, bg);
+        pass.dispatchWorkgroups(particleWG);
+        pass.end();
+      }
+
+      // Step 2: Prefix sum
+      {
+        const bg = this.device.createBindGroup({
+          layout: this.prefixSumLayout,
+          entries: [
+            { binding: 0, resource: { buffer: this.aliveFlagsBuffer } },
+            { binding: 1, resource: { buffer: this.prefixSumsBuffer } },
+            { binding: 2, resource: { buffer: this.totalAliveBuffer } },
+          ],
+        });
+        const pass = encoder.beginComputePass();
+        pass.setPipeline(this.prefixSumPipeline);
+        pass.setBindGroup(0, bg);
+        pass.dispatchWorkgroups(particleWG);
+        pass.end();
+      }
+
+      // Step 3: Scatter compact
+      {
+        const bg = this.device.createBindGroup({
+          layout: this.scatterCompactLayout,
+          entries: [
+            { binding: 0, resource: { buffer: this.particleBuffer } },
+            { binding: 1, resource: { buffer: this.aliveFlagsBuffer } },
+            { binding: 2, resource: { buffer: this.prefixSumsBuffer } },
+            { binding: 3, resource: { buffer: this.counterBuffer } },
+            { binding: 4, resource: { buffer: this.tempParticleBuffer } },
+          ],
+        });
+        const pass = encoder.beginComputePass();
+        pass.setPipeline(this.scatterCompactPipeline);
+        pass.setBindGroup(0, bg);
+        pass.dispatchWorkgroups(particleWG);
+        pass.end();
+      }
+
+      // Step 4: Copy back + update counter
+      {
+        const bg = this.device.createBindGroup({
+          layout: this.copyBackLayout,
+          entries: [
+            { binding: 0, resource: { buffer: this.particleBuffer } },
+            { binding: 1, resource: { buffer: this.tempParticleBuffer } },
+            { binding: 2, resource: { buffer: this.counterBuffer } },
+            { binding: 3, resource: { buffer: this.totalAliveBuffer } },
+          ],
+        });
+        const pass = encoder.beginComputePass();
+        pass.setPipeline(this.copyBackPipeline);
+        pass.setBindGroup(0, bg);
+        pass.dispatchWorkgroups(particleWG);
+        pass.end();
+      }
     }
 
-    // Copy to staging (use current staging set)
+    // Copy to staging — selective readback (Phase 4C)
     const staging = this.stagingSets[this.currentStaging];
-    encoder.copyBufferToBuffer(this.waterRead, 0, staging.water, 0, WATER_BUFFER_SIZE);
-    encoder.copyBufferToBuffer(this.fieldRead, 0, staging.field, 0, FIELD_BUFFER_SIZE);
-    encoder.copyBufferToBuffer(this.field2Buffer, 0, staging.field2, 0, FIELD_BUFFER_SIZE);
+    // Particles + counter every frame
     encoder.copyBufferToBuffer(this.particleBuffer, 0, staging.particles, 0, PARTICLE_BUFFER_SIZE);
     encoder.copyBufferToBuffer(this.counterBuffer, 0, staging.counter, 0, 4);
+    // Water + fields only every 2nd frame
+    const readTextures = this.frameCount % 2 === 0;
+    if (readTextures) {
+      encoder.copyBufferToBuffer(this.waterRead, 0, staging.water, 0, WATER_BUFFER_SIZE);
+      encoder.copyBufferToBuffer(this.fieldRead, 0, staging.field, 0, FIELD_BUFFER_SIZE);
+      encoder.copyBufferToBuffer(this.field2Buffer, 0, staging.field2, 0, FIELD_BUFFER_SIZE);
+    }
 
     this.device.queue.submit([encoder.finish()]);
     this.frameCount++;
@@ -582,27 +650,35 @@ export class WaterGPU {
     this.readbackPending = true;
     const READ = 0x01;
     const stagingRef = staging;
+    const doTextures = readTextures;
     
-    Promise.all([
-      stagingRef.water.mapAsync(READ),
-      stagingRef.field.mapAsync(READ),
-      stagingRef.field2.mapAsync(READ),
+    const mapPromises: Promise<void>[] = [
       stagingRef.particles.mapAsync(READ),
       stagingRef.counter.mapAsync(READ),
-    ]).then(() => {
-      this.waterData.set(new Float32Array(stagingRef.water.getMappedRange()));
-      this.fieldData.set(new Float32Array(stagingRef.field.getMappedRange()));
-      this.field2Data.set(new Float32Array(stagingRef.field2.getMappedRange()));
+    ];
+    if (doTextures) {
+      mapPromises.push(
+        stagingRef.water.mapAsync(READ),
+        stagingRef.field.mapAsync(READ),
+        stagingRef.field2.mapAsync(READ),
+      );
+    }
+
+    Promise.all(mapPromises).then(() => {
       this.particleData.set(new Float32Array(stagingRef.particles.getMappedRange()));
-      
       const counterData = new Uint32Array(stagingRef.counter.getMappedRange());
       this.activeParticles = counterData[0];
-
-      stagingRef.water.unmap();
-      stagingRef.field.unmap();
-      stagingRef.field2.unmap();
       stagingRef.particles.unmap();
       stagingRef.counter.unmap();
+
+      if (doTextures) {
+        this.waterData.set(new Float32Array(stagingRef.water.getMappedRange()));
+        this.fieldData.set(new Float32Array(stagingRef.field.getMappedRange()));
+        this.field2Data.set(new Float32Array(stagingRef.field2.getMappedRange()));
+        stagingRef.water.unmap();
+        stagingRef.field.unmap();
+        stagingRef.field2.unmap();
+      }
       
       this.readbackPending = false;
       this.dataReady = true;
@@ -622,6 +698,10 @@ export class WaterGPU {
     this.particleBuffer.destroy();
     this.counterBuffer.destroy();
     this.feedbackBuffer.destroy();
+    this.aliveFlagsBuffer.destroy();
+    this.prefixSumsBuffer.destroy();
+    this.totalAliveBuffer.destroy();
+    this.tempParticleBuffer.destroy();
     this.stagingSets.forEach(s => {
       s.water.destroy();
       s.field.destroy();
