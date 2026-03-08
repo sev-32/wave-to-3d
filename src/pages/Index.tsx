@@ -249,7 +249,7 @@ const Index = () => {
     if (phase !== 'dropping') return;
     setPhase('splashing');
     
-    // Auto-freeze after 0.4s to capture the splash
+    // Auto-freeze shortly after impact to capture crown onset
     impactTimerRef.current = setTimeout(() => {
       setPaused(true);
       setPhase('frozen');
@@ -258,8 +258,8 @@ const Index = () => {
         if ((window as any).__captureCanvas) {
           (window as any).__captureCanvas();
         }
-      }, 50);
-    }, 400);
+      }, 40);
+    }, 180);
   }, [phase]);
 
   const handleResume = useCallback(() => {

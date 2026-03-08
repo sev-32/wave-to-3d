@@ -27,30 +27,30 @@ export function useFallbackParticles(): FallbackParticlesAPI {
     const data = particleDataRef.current;
     let count = activeCountRef.current;
 
-    const emitCount = Math.max(140, Math.min(520, Math.floor(impactSpeed * 160)));
-    const upwardBase = Math.min(3.2, 0.8 + impactSpeed * 0.4);
-    const radialBase = Math.min(2.4, 0.5 + impactSpeed * 0.22);
+    const emitCount = Math.max(220, Math.min(760, Math.floor(impactSpeed * 220)));
+    const upwardBase = Math.min(4.8, 1.4 + impactSpeed * 0.55);
+    const radialBase = Math.min(3.0, 0.8 + impactSpeed * 0.28);
 
     for (let i = 0; i < emitCount && count < FALLBACK_MAX_PARTICLES; i++) {
       const b = count * 8;
       const t = i / Math.max(1, emitCount - 1);
       const angle = Math.random() * Math.PI * 2;
-      const ring = 0.015 + Math.sqrt(Math.random()) * 0.09;
+      const ring = 0.01 + Math.sqrt(Math.random()) * 0.08;
 
       const dirX = Math.cos(angle);
       const dirZ = Math.sin(angle);
 
-      const burst = 0.5 + Math.random() * 0.7;
-      const radialVel = radialBase * burst * (0.55 + t * 0.65);
-      const lift = upwardBase * (0.45 + Math.random() * 0.75) * (1.0 - t * 0.35);
+      const burst = 0.6 + Math.random() * 0.9;
+      const radialVel = radialBase * burst * (0.45 + t * 0.8);
+      const lift = upwardBase * (0.6 + Math.random() * 0.95) * (1.0 - t * 0.22);
 
       data[b] = x + dirX * ring;
-      data[b + 1] = 0.01 + Math.random() * 0.02;
+      data[b + 1] = 0.03 + Math.random() * 0.04;
       data[b + 2] = z + dirZ * ring;
-      data[b + 3] = 0.45 + Math.random() * 0.55; // mass
-      data[b + 4] = dirX * radialVel + (Math.random() - 0.5) * 0.25;
+      data[b + 3] = 0.65 + Math.random() * 0.8; // mass
+      data[b + 4] = dirX * radialVel + (Math.random() - 0.5) * 0.35;
       data[b + 5] = lift;
-      data[b + 6] = dirZ * radialVel + (Math.random() - 0.5) * 0.25;
+      data[b + 6] = dirZ * radialVel + (Math.random() - 0.5) * 0.35;
       data[b + 7] = 0.0; // age
       count++;
     }

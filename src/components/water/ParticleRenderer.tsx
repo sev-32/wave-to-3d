@@ -113,15 +113,15 @@ const fluidFragmentShader = `
     color = mix(color, vec3(0.85, 0.92, 0.97), foamFactor * 0.4);
     
     // Alpha: young = dense, old = fading
-    float youngAlpha = 0.08;  // Dense fluid accumulation
-    float sprayAlpha = 0.04;  // Lighter spray
-    float mistAlpha  = 0.015; // Very faint mist
+    float youngAlpha = 0.2;  // Dense fluid accumulation
+    float sprayAlpha = 0.11; // Lighter spray
+    float mistAlpha  = 0.045; // Very faint mist
     
     float baseAlpha = mix(youngAlpha, sprayAlpha, toSpray);
     baseAlpha = mix(baseAlpha, mistAlpha, toMist);
     
     // Mass-weighted: heavier particles contribute more
-    baseAlpha *= vMass * 1.5;
+    baseAlpha *= vMass * 1.8;
     
     // Final fade at end of life
     float lifeFade = 1.0 - smoothstep(1.8, 2.5, ageFrac);
