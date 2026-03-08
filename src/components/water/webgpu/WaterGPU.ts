@@ -159,6 +159,11 @@ export class WaterGPU {
     this.particleBuffer = device.createBuffer({ size: PARTICLE_BUFFER_SIZE, usage: STORAGE | COPY_SRC });
     this.counterBuffer = device.createBuffer({ size: 256, usage: STORAGE | COPY_SRC | COPY_DST });
     this.feedbackBuffer = device.createBuffer({ size: FEEDBACK_BUFFER_SIZE, usage: STORAGE | COPY_DST });
+    // Parallel compaction buffers
+    this.aliveFlagsBuffer = device.createBuffer({ size: ALIVE_FLAGS_SIZE, usage: STORAGE });
+    this.prefixSumsBuffer = device.createBuffer({ size: ALIVE_FLAGS_SIZE, usage: STORAGE });
+    this.totalAliveBuffer = device.createBuffer({ size: 256, usage: STORAGE | COPY_DST });
+    this.tempParticleBuffer = device.createBuffer({ size: PARTICLE_BUFFER_SIZE, usage: STORAGE });
     
     device.queue.writeBuffer(this.counterBuffer, 0, new Uint32Array([0]));
     // Zero out feedback buffer
