@@ -138,28 +138,23 @@ fn sphereSDF(p: vec3f, center: vec3f, radius: f32) -> f32 {
 fn volumeInSphere(center: vec3f, uv: vec2f, radius: f32) -> f32 {
   let worldPos = vec3f(uv.x * 2.0 - 1.0, 0.0, uv.y * 2.0 - 1.0);
   let dist = length(worldPos.xz - center.xz);
-  
-  // Use proper SDF-based volume displacement
   let horizontalDist = dist / radius;
   
-  if (horizontalDist > 1.5) { return 0.0; }
+  if (horizontalDist > 1.3) { return 0.0; }
   
-  // Smooth sphere cap volume
   let cap = max(0.0, 1.0 - horizontalDist * horizontalDist);
   let sphereTop = center.y + radius * sqrt(cap);
   let sphereBot = center.y - radius * sqrt(cap);
   
-  // Water surface displacement based on submerged volume
   let waterY = 0.0;
   let submergedTop = min(sphereTop, waterY);
-  let submergedBot = max(sphereBot, -1.0); // pool floor
+  let submergedBot = max(sphereBot, -1.0);
   
   if (submergedTop <= submergedBot) { return 0.0; }
   
-  // Displacement proportional to submerged cross-section
-  let displacement = (submergedTop - submergedBot) * cap * 0.15;
-  
-  return displacement;
+  // Gentle displacement - clamped to prevent runaway
+  let displacement = (submergedTop - submergedBot) * cap * 0.04;
+  return min(displacement, 0.02);
 }
 
 @compute @workgroup_size(16, 16)
@@ -193,17 +188,19 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       let pointDir = normalize(toPoint + vec2f(0.0001));
       let alignment = dot(velDir2D, pointDir);
       
-      // Bow wave: positive ahead, negative behind
-      let bowWave = alignment * speed * 2.0;
-      let falloff = exp(-normDist * 1.2);
+      // Gentle bow wave
+      let bowWave = alignment * speed * 0.6;
+      let falloff = exp(-normDist * 1.8);
       
-      // Kelvin wake pattern (V-shaped)
+      // Kelvin wake pattern
       let crossAlignment = abs(cross(vec3f(velDir2D, 0.0), vec3f(pointDir, 0.0)).z);
-      let wakeAngle = 0.33; // ~19.5 degrees Kelvin angle
+      let wakeAngle = 0.33;
       let isInWake = smoothstep(wakeAngle - 0.1, wakeAngle + 0.1, crossAlignment);
-      let wakeFactor = isInWake * (1.0 - alignment) * 0.5; // Behind the sphere
+      let wakeFactor = isInWake * (1.0 - alignment) * 0.15;
       
-      info.y += (bowWave * falloff + wakeFactor * speed * falloff) * 0.3;
+      // Clamp total velocity addition to prevent instability
+      let waveAdd = (bowWave * falloff + wakeFactor * speed * falloff) * 0.08;
+      info.y += clamp(waveAdd, -0.03, 0.03);
     }
   }
   
@@ -239,17 +236,16 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let i = z * N + x;
   let info = water[i];
   let prevField = fieldIn[i];
+  let prevField2 = field2[i]; // Previous momentum data
   
   let height = info.x;
   let velocity = info.y;
   
-  // Safe neighbor access
   let lx = select(x - 1u, 0u, x == 0u);
   let rx = min(x + 1u, N - 1u);
   let uz = select(z - 1u, 0u, z == 0u);
   let dz = min(z + 1u, N - 1u);
   
-  // Height gradient
   let hL = water[z * N + lx].x;
   let hR = water[z * N + rx].x;
   let hU = water[uz * N + x].x;
@@ -259,25 +255,22 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let gradZ = (hD - hU) * 0.5 * f32(N);
   let slope = sqrt(gradX * gradX + gradZ * gradZ);
   
-  // Laplacian (curvature proxy)
   let laplacian = (hL + hR + hU + hD - 4.0 * height) * f32(N) * f32(N);
   let crestness = abs(laplacian);
-  
-  // Upward excitation
   let Eup = max(0.0, velocity);
   
-  // ---- Surface Momentum U ----
+  // ---- Surface Momentum U (read from field2 previous values) ----
   let momentumGainX = -gradX * velocity * params.dt * 5.0;
   let momentumGainZ = -gradZ * velocity * params.dt * 5.0;
-  var Ux = prevField.x * 0.95 + momentumGainX;
-  var Uz = prevField.y * 0.95 + momentumGainZ;
+  var Ux = prevField2.x * 0.95 + momentumGainX;
+  var Uz = prevField2.y * 0.95 + momentumGainZ;
   let Umag = sqrt(Ux * Ux + Uz * Uz);
   
-  // Momentum divergence
-  let UxL = fieldIn[z * N + lx].x;
-  let UxR = fieldIn[z * N + rx].x;
-  let UzU = fieldIn[uz * N + x].y;
-  let UzD = fieldIn[dz * N + x].y;
+  // Momentum divergence from field2 neighbors
+  let UxL = field2[z * N + lx].x;
+  let UxR = field2[z * N + rx].x;
+  let UzU = field2[uz * N + x].y;
+  let UzD = field2[dz * N + x].y;
   let divU = (UxR - UxL + UzD - UzU) * 0.5 * f32(N);
   
   // ---- Rupture Potential R ----
@@ -365,7 +358,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let M = field.z;
   
   // Emit from high-R, high-M regions with energy threshold
-  if (R < 0.3 || M < 0.08) { return; }
+  if (R < 0.15 || M < 0.05) { return; }
   
   let f2 = fields2[i];
   let Ux = f2.x;
@@ -374,8 +367,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let height = waterInfo.x;
   let velocity = waterInfo.y;
   
-  // Only emit when there's upward energy
-  if (velocity < 0.001) { return; }
+  // Emit when there's any significant upward energy
+  if (velocity < 0.0005) { return; }
   
   // Pseudo-random using position for stochastic emission
   let noise = fract(sin(f32(x) * 12.9898 + f32(z) * 78.233 + f32(atomicLoad(&counter[0])) * 0.1) * 43758.5453);
