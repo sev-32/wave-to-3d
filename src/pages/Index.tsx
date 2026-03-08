@@ -39,14 +39,14 @@ function DropPrompt({ onClick }: { onClick: () => void }) {
   );
 }
 
-function FrozenOverlay({ onResume, onReset, onCapture, capturedImage }: { 
-  onResume: () => void; 
+const FrozenOverlay = forwardRef<HTMLDivElement, {
+  onResume: () => void;
   onReset: () => void;
   onCapture: () => void;
   capturedImage: string | null;
-}) {
+}>(({ onResume, onReset, onCapture, capturedImage }, ref) => {
   return (
-    <div className="absolute inset-0 z-20">
+    <div ref={ref} className="absolute inset-0 z-20">
       {/* Frozen border indicator */}
       <div className="absolute inset-0 pointer-events-none border-4 border-primary/60 rounded-sm" />
       <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-2 px-4 py-2 rounded-full bg-primary/90 text-primary-foreground text-sm font-semibold shadow-lg">
@@ -81,7 +81,7 @@ function FrozenOverlay({ onResume, onReset, onCapture, capturedImage }: {
       )}
     </div>
   );
-}
+});
 
 function InfoPanel({ isWebGPU, phase }: { isWebGPU: boolean | null; phase: SimPhase }) {
   return (
