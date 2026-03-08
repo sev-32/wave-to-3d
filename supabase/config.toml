@@ -1,1 +1,4 @@
 project_id = "wkiuhnagsztbfjtlgihs"
+
+[functions.analyze-screenshot]
+verify_jwt = false
