@@ -228,6 +228,7 @@ export function WaterScene({
     } else {
       webglSim.stepSimulation();
       webglSim.updateNormals();
+      fallbackParticles.step(delta);
       waterTexture = webglSim.getWaterTexture();
     }
     
