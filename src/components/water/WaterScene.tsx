@@ -43,6 +43,7 @@ export function WaterScene({
   const webgpu = useWebGPUWater();
   const webglSim = useWaterSimulation();
   const caustics = useCaustics();
+  const fallbackParticles = useFallbackParticles();
   
   const useGPU = webgpu.isWebGPU && webgpu.isReady;
   
