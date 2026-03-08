@@ -188,17 +188,19 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       let pointDir = normalize(toPoint + vec2f(0.0001));
       let alignment = dot(velDir2D, pointDir);
       
-      // Bow wave: positive ahead, negative behind
-      let bowWave = alignment * speed * 2.0;
-      let falloff = exp(-normDist * 1.2);
+      // Gentle bow wave
+      let bowWave = alignment * speed * 0.6;
+      let falloff = exp(-normDist * 1.8);
       
-      // Kelvin wake pattern (V-shaped)
+      // Kelvin wake pattern
       let crossAlignment = abs(cross(vec3f(velDir2D, 0.0), vec3f(pointDir, 0.0)).z);
-      let wakeAngle = 0.33; // ~19.5 degrees Kelvin angle
+      let wakeAngle = 0.33;
       let isInWake = smoothstep(wakeAngle - 0.1, wakeAngle + 0.1, crossAlignment);
-      let wakeFactor = isInWake * (1.0 - alignment) * 0.5; // Behind the sphere
+      let wakeFactor = isInWake * (1.0 - alignment) * 0.15;
       
-      info.y += (bowWave * falloff + wakeFactor * speed * falloff) * 0.3;
+      // Clamp total velocity addition to prevent instability
+      let waveAdd = (bowWave * falloff + wakeFactor * speed * falloff) * 0.08;
+      info.y += clamp(waveAdd, -0.03, 0.03);
     }
   }
   
