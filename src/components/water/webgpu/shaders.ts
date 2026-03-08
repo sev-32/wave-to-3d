@@ -167,9 +167,9 @@ fn volumeInSphere(center: vec3f, uv: vec2f, radius: f32) -> f32 {
   
   if (submergedTop <= submergedBot) { return 0.0; }
   
-  // Stronger displacement — scaled with submersion depth
-  let displacement = (submergedTop - submergedBot) * cap * 0.15;
-  return min(displacement, 0.08);
+  // Balanced displacement to avoid oversized craters
+  let displacement = (submergedTop - submergedBot) * cap * 0.065;
+  return min(displacement, 0.03);
 }
 
 @compute @workgroup_size(16, 16)
