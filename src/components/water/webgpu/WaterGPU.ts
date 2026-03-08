@@ -3,11 +3,12 @@
  * Manages all GPU compute pipelines for water simulation,
  * surface intent fields, and MLS-MPM particle emission.
  * 
- * Phase 2-4 enhancements:
- * - Particle feedback shader (two-way coupling)
- * - Fields passed to particle update for adhesion recapture
+ * Phase 2-5 enhancements:
+ * - Particle feedback via atomic accumulation buffer (no race condition)
+ * - Fields passed to particle update for adhesion recapture with mass return
  * - Double-buffered staging for readback
- * - Emit every 2 frames, compact every 20
+ * - Sphere tangential forcing (field2 bound in sphere displacement)
+ * - Parallel compaction (mark → prefix sum → scatter → copy back)
  */
 
 import {
@@ -20,13 +21,16 @@ import {
   surfaceFieldsShader,
   emitParticlesShader,
   updateParticlesShader,
-  particleFeedbackShader,
+  applyFeedbackShader,
   resetParticlesShader,
+  particleFeedbackShader,
 } from './shaders';
 
 const WATER_BUFFER_SIZE = GRID_SIZE * GRID_SIZE * 4 * 4;
 const FIELD_BUFFER_SIZE = GRID_SIZE * GRID_SIZE * 4 * 4;
 const PARTICLE_BUFFER_SIZE = MAX_PARTICLES * 2 * 4 * 4;
+// Feedback buffer: 2 * GRID_SIZE^2 i32 values (mass return + water impulse)
+const FEEDBACK_BUFFER_SIZE = GRID_SIZE * GRID_SIZE * 2 * 4;
 
 interface Drop {
   x: number;
@@ -59,6 +63,7 @@ export class WaterGPU {
   private field2Buffer: any;
   private particleBuffer: any;
   private counterBuffer: any;
+  private feedbackBuffer: any;
   
   // Double-buffered staging
   private stagingSets: Array<{
@@ -83,15 +88,18 @@ export class WaterGPU {
   private fieldsPipeline: any;
   private emitPipeline: any;
   private updateParticlesPipeline: any;
-  private feedbackPipeline: any;
+  private applyFeedbackPipeline: any;
+  private legacyFeedbackPipeline: any;
   private resetParticlesPipeline: any;
   
   private waterRWLayout: any;
   private waterRWUniformLayout: any;
+  private sphereLayout: any;
   private fieldsLayout: any;
   private emitLayout: any;
   private particleUpdateLayout: any;
-  private feedbackLayout: any;
+  private applyFeedbackLayout: any;
+  private legacyFeedbackLayout: any;
   private particleResetLayout: any;
 
   private dropQueue: Drop[] = [];
@@ -129,8 +137,11 @@ export class WaterGPU {
     this.field2Buffer = device.createBuffer({ size: FIELD_BUFFER_SIZE, usage: STORAGE | COPY_SRC });
     this.particleBuffer = device.createBuffer({ size: PARTICLE_BUFFER_SIZE, usage: STORAGE | COPY_SRC });
     this.counterBuffer = device.createBuffer({ size: 256, usage: STORAGE | COPY_SRC | COPY_DST });
+    this.feedbackBuffer = device.createBuffer({ size: FEEDBACK_BUFFER_SIZE, usage: STORAGE | COPY_DST });
     
     device.queue.writeBuffer(this.counterBuffer, 0, new Uint32Array([0]));
+    // Zero out feedback buffer
+    device.queue.writeBuffer(this.feedbackBuffer, 0, new Int32Array(GRID_SIZE * GRID_SIZE * 2));
 
     // Double-buffered staging
     this.stagingSets = [0, 1].map(() => ({
@@ -153,7 +164,7 @@ export class WaterGPU {
     device.queue.writeBuffer(this.fieldParamsBuffer, 0, new Float32Array([0.016, 0.35, 2.2, 0.4]));
     device.queue.writeBuffer(this.physicsParamsBuffer, 0, new Float32Array([0.016, 9.8, 0.995, 2.5]));
 
-    // Initialize field buffers with realistic baseline so impact can emit immediately
+    // Initialize field buffers with realistic baseline
     const initialFields = new Float32Array(GRID_SIZE * GRID_SIZE * 4);
     for (let i = 0; i < initialFields.length; i += 4) {
       initialFields[i] = 0.0;    // R
@@ -182,6 +193,16 @@ export class WaterGPU {
       ],
     });
 
+    // Sphere displacement: water read, water write, uniform, field2 (for tangential forcing)
+    this.sphereLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 1, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 2, visibility: COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 3, visibility: COMPUTE, buffer: { type: 'storage' } },
+      ],
+    });
+
     this.fieldsLayout = device.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
@@ -202,18 +223,28 @@ export class WaterGPU {
       ],
     });
 
-    // Particle update now needs fields for adhesion recapture
+    // Particle update: particles, counter, physics uniform, fields (read), feedbackBuf
     this.particleUpdateLayout = device.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: COMPUTE, buffer: { type: 'storage' } },
         { binding: 1, visibility: COMPUTE, buffer: { type: 'storage' } },
         { binding: 2, visibility: COMPUTE, buffer: { type: 'uniform' } },
         { binding: 3, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 4, visibility: COMPUTE, buffer: { type: 'storage' } },
       ],
     });
 
-    // Particle feedback: particles write impulses to water
-    this.feedbackLayout = device.createBindGroupLayout({
+    // Apply feedback: water, fieldOut, feedbackBuf
+    this.applyFeedbackLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 1, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 2, visibility: COMPUTE, buffer: { type: 'storage' } },
+      ],
+    });
+
+    // Legacy feedback (now a no-op, kept for compatibility)
+    this.legacyFeedbackLayout = device.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
         { binding: 1, visibility: COMPUTE, buffer: { type: 'storage' } },
@@ -232,11 +263,12 @@ export class WaterGPU {
     this.dropPipeline = this.createPipeline(waterDropShader, this.waterRWUniformLayout);
     this.updatePipeline = this.createPipeline(waterUpdateShader, this.waterRWUniformLayout);
     this.normalsPipeline = this.createPipeline(waterNormalsShader, this.waterRWLayout);
-    this.spherePipeline = this.createPipeline(sphereDisplacementShader, this.waterRWUniformLayout);
+    this.spherePipeline = this.createPipeline(sphereDisplacementShader, this.sphereLayout);
     this.fieldsPipeline = this.createPipeline(surfaceFieldsShader, this.fieldsLayout);
     this.emitPipeline = this.createPipeline(emitParticlesShader, this.emitLayout);
     this.updateParticlesPipeline = this.createPipeline(updateParticlesShader, this.particleUpdateLayout);
-    this.feedbackPipeline = this.createPipeline(particleFeedbackShader, this.feedbackLayout);
+    this.applyFeedbackPipeline = this.createPipeline(applyFeedbackShader, this.applyFeedbackLayout);
+    this.legacyFeedbackPipeline = this.createPipeline(particleFeedbackShader, this.legacyFeedbackLayout);
     this.resetParticlesPipeline = this.createPipeline(resetParticlesShader, this.particleResetLayout);
   }
 
@@ -249,8 +281,8 @@ export class WaterGPU {
       
       const device = await adapter.requestDevice({
         requiredLimits: {
-          maxStorageBufferBindingSize: Math.max(WATER_BUFFER_SIZE, PARTICLE_BUFFER_SIZE),
-          maxBufferSize: Math.max(WATER_BUFFER_SIZE, PARTICLE_BUFFER_SIZE),
+          maxStorageBufferBindingSize: Math.max(WATER_BUFFER_SIZE, PARTICLE_BUFFER_SIZE, FEEDBACK_BUFFER_SIZE),
+          maxBufferSize: Math.max(WATER_BUFFER_SIZE, PARTICLE_BUFFER_SIZE, FEEDBACK_BUFFER_SIZE),
         },
       });
       
@@ -319,7 +351,7 @@ export class WaterGPU {
     }
     this.dropQueue = [];
 
-    // 2. Sphere displacement
+    // 2. Sphere displacement (now with field2 for tangential forcing)
     if (this.sphereState) {
       const s = this.sphereState;
       this.device.queue.writeBuffer(this.sphereParamsBuffer, 0, new Float32Array([
@@ -327,11 +359,12 @@ export class WaterGPU {
         s.newX, s.newY, s.newZ, 0,
       ]));
       const bg = this.device.createBindGroup({
-        layout: this.waterRWUniformLayout,
+        layout: this.sphereLayout,
         entries: [
           { binding: 0, resource: { buffer: this.waterRead } },
           { binding: 1, resource: { buffer: this.waterWrite } },
           { binding: 2, resource: { buffer: this.sphereParamsBuffer } },
+          { binding: 3, resource: { buffer: this.field2Buffer } },
         ],
       });
       const pass = encoder.beginComputePass();
@@ -398,7 +431,7 @@ export class WaterGPU {
       this.swapField();
     }
 
-    // 6. Emit particles (every frame for responsive impact spray)
+    // 6. Emit particles
     {
       const bg = this.device.createBindGroup({
         layout: this.emitLayout,
@@ -417,7 +450,7 @@ export class WaterGPU {
       pass.end();
     }
 
-    // 7. Update particles (with fields for adhesion recapture)
+    // 7. Update particles (with fields for adhesion + atomic feedback buffer)
     {
       const bg = this.device.createBindGroup({
         layout: this.particleUpdateLayout,
@@ -426,6 +459,7 @@ export class WaterGPU {
           { binding: 1, resource: { buffer: this.counterBuffer } },
           { binding: 2, resource: { buffer: this.physicsParamsBuffer } },
           { binding: 3, resource: { buffer: this.fieldRead } },
+          { binding: 4, resource: { buffer: this.feedbackBuffer } },
         ],
       });
       const pass = encoder.beginComputePass();
@@ -435,26 +469,25 @@ export class WaterGPU {
       pass.end();
     }
 
-    // 8. Particle feedback to water (two-way coupling)
+    // 8. Apply feedback (atomic buffer → water + field M)
     if (this.frameCount % 2 === 0) {
       const bg = this.device.createBindGroup({
-        layout: this.feedbackLayout,
+        layout: this.applyFeedbackLayout,
         entries: [
-          { binding: 0, resource: { buffer: this.particleBuffer } },
-          { binding: 1, resource: { buffer: this.waterWrite } },
-          { binding: 2, resource: { buffer: this.counterBuffer } },
+          { binding: 0, resource: { buffer: this.waterWrite } },
+          { binding: 1, resource: { buffer: this.fieldWrite } },
+          { binding: 2, resource: { buffer: this.feedbackBuffer } },
         ],
       });
       const pass = encoder.beginComputePass();
-      pass.setPipeline(this.feedbackPipeline);
+      pass.setPipeline(this.applyFeedbackPipeline);
       pass.setBindGroup(0, bg);
-      pass.dispatchWorkgroups(Math.ceil(MAX_PARTICLES / 256));
+      pass.dispatchWorkgroups(wg, wg);
       pass.end();
-      // Note: feedback writes to waterWrite, so we need to swap
       this.swapWater();
     }
 
-    // 9. Reset/compact particles (every 20 frames)
+    // 9. Reset/compact particles (every 20 frames, serial fallback)
     if (this.frameCount % 20 === 0) {
       const bg = this.device.createBindGroup({
         layout: this.particleResetLayout,
@@ -524,6 +557,7 @@ export class WaterGPU {
     this.field2Buffer.destroy();
     this.particleBuffer.destroy();
     this.counterBuffer.destroy();
+    this.feedbackBuffer.destroy();
     this.stagingSets.forEach(s => {
       s.water.destroy();
       s.field.destroy();
